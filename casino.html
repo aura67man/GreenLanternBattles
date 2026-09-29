@@ -1,0 +1,1420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Royal Chip Casino</title>
+<style>
+/* Single dark look: one full-window canvas letterboxed on a velvet-black ground. */
+:root{--ground:#0b0406;color-scheme:dark}
+html,body{margin:0;height:100%;background:var(--ground);overflow:hidden}
+canvas{display:block;position:absolute;touch-action:none;-webkit-user-select:none;user-select:none}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Royal Chip Casino game"></canvas>
+<script>
+'use strict';
+// =====================================================================
+//  ROYAL CHIP CASINO  —  play-money casino, single file, canvas only
+// =====================================================================
+const W = 1280, H = 800;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let K = 1;
+function resize() {
+  const ww = innerWidth, wh = innerHeight, s = Math.min(ww / W, wh / H);
+  const cw = Math.floor(W * s), ch = Math.floor(H * s);
+  cv.style.width = cw + 'px'; cv.style.height = ch + 'px';
+  cv.style.left = Math.floor((ww - cw) / 2) + 'px'; cv.style.top = Math.floor((wh - ch) / 2) + 'px';
+  const dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(cw * dpr); cv.height = Math.round(ch * dpr); K = cv.width / W;
+}
+addEventListener('resize', resize); resize();
+
+// ---------------- utilities ----------------
+const rnd = Math.random, rint = n => Math.floor(rnd() * n);
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const TAU = Math.PI * 2;
+const SERIF = 'Georgia, "Times New Roman", serif', SANS = 'Arial, Helvetica, sans-serif';
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = rint(i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function newShoe(decks) { const a = []; for (let d = 0; d < decks; d++) for (let s = 0; s < 4; s++) for (let r = 1; r <= 13; r++) a.push({ r, s }); return shuffle(a); }
+function fmt(n) { return (n < 0 ? '-$' : '$') + Math.floor(Math.abs(n)).toLocaleString('en-US'); }
+function shade(c, amt) {
+  let h = c.replace('#', ''); if (h.length === 3) h = h.split('').map(x => x + x).join('');
+  let r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+  const t = amt < 0 ? 0 : 255, p = Math.abs(amt);
+  return `rgb(${Math.round(r + (t - r) * p)},${Math.round(g + (t - g) * p)},${Math.round(b + (t - b) * p)})`;
+}
+function rr(x, y, w, h, r) { ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+function circ(x, y, r) { ctx.moveTo(x + r, y); ctx.arc(x, y, r, 0, TAU); }
+function T(s, x, y, size, color, align, weight, font) {
+  ctx.font = (weight || 'bold') + ' ' + size + 'px ' + (font || SANS);
+  ctx.fillStyle = color || '#fff'; ctx.textAlign = align || 'center'; ctx.textBaseline = 'middle';
+  ctx.fillText(s, x, y);
+}
+function wrap(s, maxW) {
+  const words = s.split(' '), lines = []; let cur = '';
+  for (const w of words) { const t = cur ? cur + ' ' + w : w; if (ctx.measureText(t).width > maxW && cur) { lines.push(cur); cur = w; } else cur = t; }
+  if (cur) lines.push(cur); return lines;
+}
+function goldGrad(y0, y1) { const g = ctx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, '#fff2b8'); g.addColorStop(.45, '#e8c14a'); g.addColorStop(.55, '#b8861f'); g.addColorStop(1, '#f5d77a'); return g; }
+const easeOutCubic = u => 1 - Math.pow(1 - u, 3);
+const easeOutQuart = u => 1 - Math.pow(1 - u, 4);
+function easeOutBounce(x) { const n = 7.5625, d = 2.75; if (x < 1 / d) return n * x * x; if (x < 2 / d) return n * (x -= 1.5 / d) * x + .75; if (x < 2.5 / d) return n * (x -= 2.25 / d) * x + .9375; return n * (x -= 2.625 / d) * x + .984375; }
+
+// ---------------- state & persistence ----------------
+const S = { chips: 1000, best: 1000, scene: 'menu', def: null, game: null, inst: {}, denom: 25, sound: true, overlay: false, time: 0, popups: [], toast: null, bustT: 0, saveT: 0, resetArm: -99 };
+try { const d = JSON.parse(localStorage.getItem('royalchip_save') || 'null'); if (d && d.chips > 0) { S.chips = Math.floor(d.chips); S.best = Math.max(d.best || 1000, S.chips); S.sound = d.sound !== false; } } catch (e) { }
+function save() {
+  try {
+    let c = S.chips; const g = S.game;
+    if (g && S.scene === 'game' && g.phase === 'bet' && !(g instanceof Craps && g.point !== null)) c += g.onTable();
+    localStorage.setItem('royalchip_save', JSON.stringify({ chips: c, best: S.best, sound: S.sound }));
+  } catch (e) { }
+}
+function toast(t) { S.toast = { text: t, t: 0 }; }
+function popup(x, y, text, color) { S.popups.push({ x, y, text, color, t: 0 }); }
+function popNet(x, y, net) { if (net > 0) popup(x, y, '+' + fmt(net), '#7dff8a'); else if (net < 0) popup(x, y, '-' + fmt(-net), '#ff6b6b'); else popup(x, y, 'PUSH', '#ffe08a'); }
+
+// ---------------- sound (WebAudio synth) ----------------
+const Snd = {
+  a: null,
+  init() { if (this.a) { if (this.a.state === 'suspended') this.a.resume(); return; } try { this.a = new (window.AudioContext || window.webkitAudioContext)(); } catch (e) { } },
+  tone(f, d, type, v, delay, slide) {
+    if (!S.sound || !this.a) return; const a = this.a, t = a.currentTime + (delay || 0);
+    const o = a.createOscillator(), g = a.createGain(); o.type = type || 'sine'; o.frequency.setValueAtTime(f, t);
+    if (slide) o.frequency.exponentialRampToValueAtTime(slide, t + d);
+    g.gain.setValueAtTime(v || .1, t); g.gain.exponentialRampToValueAtTime(.0005, t + d);
+    o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + d + .03);
+  },
+  noise(d, v, delay, freq, q) {
+    if (!S.sound || !this.a) return; const a = this.a, t = a.currentTime + (delay || 0);
+    const len = Math.max(1, Math.floor(a.sampleRate * d)), buf = a.createBuffer(1, len, a.sampleRate), ch = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) ch[i] = (rnd() * 2 - 1) * (1 - i / len);
+    const src = a.createBufferSource(); src.buffer = buf; const f = a.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = freq || 2000; f.Q.value = q || 1;
+    const g = a.createGain(); g.gain.value = v || .2; src.connect(f); f.connect(g); g.connect(a.destination); src.start(t);
+  },
+  chip() { this.noise(.05, .5, 0, 4200, 3); this.tone(3100, .05, 'triangle', .04); },
+  card() { this.noise(.09, .35, 0, 2500, .7); },
+  click() { this.tone(900, .04, 'square', .03); },
+  win() { [523, 659, 784, 1047].forEach((f, i) => this.tone(f, .28, 'triangle', .09, i * .08)); },
+  big() { [523, 659, 784, 1047, 784, 1047, 1319, 1568].forEach((f, i) => this.tone(f, .3, 'triangle', .09, i * .09)); },
+  lose() { this.tone(260, .45, 'sawtooth', .04, 0, 120); },
+  thunk() { this.tone(120, .12, 'square', .06, 0, 60); this.noise(.06, .3, 0, 800); },
+  tick() { this.tone(1600, .02, 'square', .02); },
+  dice() { for (let i = 0; i < 7; i++) this.noise(.04, .4, i * .12 + rnd() * .05, 1500 + rnd() * 1500, 2); },
+  boom() { this.noise(.9, .8, 0, 180, .5); this.tone(90, .6, 'sawtooth', .08, 0, 30); },
+  launch() { this.tone(200, 1.2, 'sawtooth', .025, 0, 900); },
+  lever() { this.noise(.25, .3, 0, 600, 1); this.tone(300, .2, 'square', .03, 0, 150); }
+};
+
+// ---------------- input & immediate-mode UI ----------------
+const M = { x: -1, y: -1 };
+const UI = { items: [] };
+function toLocal(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / r.width * W, y: (e.clientY - r.top) / r.height * H }; }
+cv.addEventListener('pointermove', e => { const p = toLocal(e); M.x = p.x; M.y = p.y; });
+cv.addEventListener('pointerleave', () => { M.x = M.y = -1; });
+cv.addEventListener('pointerdown', e => {
+  Snd.init(); const p = toLocal(e); M.x = p.x; M.y = p.y;
+  for (let i = UI.items.length - 1; i >= 0; i--) {
+    const it = UI.items[i];
+    if (p.x >= it.x && p.x <= it.x + it.w && p.y >= it.y && p.y <= it.y + it.h) {
+      if (e.button === 2 && !it.right) continue;
+      it.cb(e.button); return;
+    }
+  }
+});
+cv.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', e => {
+  Snd.init();
+  if (S.scene === 'game' && S.game && !S.overlay && S.game.hot) {
+    if (e.key === ' ' || e.key === 'Enter') e.preventDefault();
+    S.game.hot(e.key.toLowerCase());
+  }
+  if (e.key === 'Escape' && S.overlay) S.overlay = false;
+});
+function over(x, y, w, h) { return M.x >= x && M.x <= x + w && M.y >= y && M.y <= y + h; }
+function region(x, y, w, h, cb, right) { UI.items.push({ x, y, w, h, cb, right }); }
+function button(x, y, w, h, label, cb, o) {
+  o = o || {}; const en = o.enabled !== false, hov = en && over(x, y, w, h), base = o.color || '#d4a93c';
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,.55)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3;
+  rr(x, y, w, h, Math.min(12, h / 2));
+  const g = ctx.createLinearGradient(0, y, 0, y + h);
+  if (!en) { g.addColorStop(0, '#4a4a4a'); g.addColorStop(1, '#2a2a2a'); }
+  else { g.addColorStop(0, shade(base, hov ? .4 : .22)); g.addColorStop(.5, base); g.addColorStop(1, shade(base, hov ? -.1 : -.3)); }
+  ctx.fillStyle = g; ctx.fill(); ctx.shadowColor = 'transparent';
+  ctx.lineWidth = 2; ctx.strokeStyle = en ? (hov ? '#fff4c8' : 'rgba(255,230,160,.75)') : '#555'; ctx.stroke();
+  T(label, x + w / 2, y + h / 2 + 1, o.size || 17, en ? (o.text || '#241300') : '#8a8a8a', 'center', 'bold', o.font);
+  ctx.restore();
+  if (en) UI.items.push({ x, y, w, h, cb: () => { Snd.click(); cb(); } });
+  return hov;
+}
+
+// ---------------- pre-rendered textures ----------------
+const CARPET = document.createElement('canvas'); CARPET.width = W; CARPET.height = H;
+(() => {
+  const c = CARPET.getContext('2d'); c.fillStyle = '#3d0a12'; c.fillRect(0, 0, W, H);
+  for (let y = 0, row = 0; y < H + 80; y += 60, row++) for (let x = -60; x < W + 80; x += 80) {
+    const cx = x + (row % 2 ? 40 : 0), cy = y;
+    c.strokeStyle = 'rgba(214,164,70,.22)'; c.lineWidth = 2; c.beginPath(); c.moveTo(cx, cy - 26); c.lineTo(cx + 34, cy); c.lineTo(cx, cy + 26); c.lineTo(cx - 34, cy); c.closePath(); c.stroke();
+    c.fillStyle = 'rgba(20,0,6,.35)'; c.beginPath(); c.moveTo(cx, cy - 16); c.lineTo(cx + 20, cy); c.lineTo(cx, cy + 16); c.lineTo(cx - 20, cy); c.closePath(); c.fill();
+    c.fillStyle = 'rgba(214,164,70,.3)'; c.beginPath(); c.arc(cx, cy, 4, 0, TAU); c.fill();
+    c.fillStyle = 'rgba(120,20,40,.35)'; c.beginPath(); c.arc(cx + 40, cy + 30, 7, 0, TAU); c.fill();
+  }
+  const g = c.createRadialGradient(W / 2, H / 2, 200, W / 2, H / 2, 820); g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.75)');
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+})();
+const NOISE = document.createElement('canvas'); NOISE.width = 256; NOISE.height = 256;
+(() => { const c = NOISE.getContext('2d'), d = c.createImageData(256, 256); for (let i = 0; i < d.data.length; i += 4) { const v = rint(255); d.data[i] = d.data[i + 1] = d.data[i + 2] = v; d.data[i + 3] = 255; } c.putImageData(d, 0, 0); })();
+const NOISE_PAT = ctx.createPattern(NOISE, 'repeat');
+const BOKEH = document.createElement('canvas'); BOKEH.width = W; BOKEH.height = H;
+(() => {
+  const c = BOKEH.getContext('2d'); const g = c.createLinearGradient(0, 0, 0, H); g.addColorStop(0, '#12050f'); g.addColorStop(1, '#050208'); c.fillStyle = g; c.fillRect(0, 0, W, H);
+  const cols = ['255,80,120', '255,200,80', '120,160,255', '200,90,255', '80,255,200'];
+  for (let i = 0; i < 70; i++) { const x = rnd() * W, y = rnd() * H * .7, r = 10 + rnd() * 50, col = cols[rint(5)]; const rg = c.createRadialGradient(x, y, 0, x, y, r); rg.addColorStop(0, `rgba(${col},${.08 + rnd() * .15})`); rg.addColorStop(1, `rgba(${col},0)`); c.fillStyle = rg; c.fillRect(x - r, y - r, r * 2, r * 2); }
+  c.fillStyle = 'rgba(0,0,0,.4)'; c.fillRect(0, H * .75, W, H * .25);
+})();
+function roomBg(dark) { ctx.drawImage(CARPET, 0, 0); ctx.fillStyle = `rgba(0,0,0,${dark == null ? .55 : dark})`; ctx.fillRect(0, 0, W, H); }
+function feltFill(color, cx, cy) {
+  const g = ctx.createRadialGradient(cx || 640, cy || 330, 40, cx || 640, cy || 380, 760);
+  g.addColorStop(0, shade(color, .18)); g.addColorStop(.6, color); g.addColorStop(1, shade(color, -.5));
+  ctx.fillStyle = g; ctx.fill();
+  ctx.save(); ctx.globalAlpha = .06; ctx.fillStyle = NOISE_PAT; ctx.fill(); ctx.restore();
+}
+function railStroke() {
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = '#1a0b05'; ctx.lineWidth = 46; ctx.stroke();
+  ctx.strokeStyle = '#3b1d0e'; ctx.lineWidth = 38; ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,200,140,.12)'; ctx.lineWidth = 16; ctx.stroke();
+  ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+}
+function halfTable(color) {
+  const path = (rx, ry) => { ctx.beginPath(); ctx.moveTo(640 - rx, 66); ctx.lineTo(640 + rx, 66); ctx.ellipse(640, 66, rx, ry, 0, 0, Math.PI); ctx.closePath(); };
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 40; path(550, 650); ctx.fillStyle = '#000'; ctx.fill(); ctx.restore();
+  path(550, 650); feltFill(color, 640, 300); railStroke();
+  path(515, 612); ctx.setLineDash([]); ctx.strokeStyle = 'rgba(232,193,74,.35)'; ctx.lineWidth = 2; ctx.stroke();
+}
+function rectTable(color, x, y, w, h, r) {
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 40; rr(x, y, w, h, r); ctx.fillStyle = '#000'; ctx.fill(); ctx.restore();
+  rr(x, y, w, h, r); feltFill(color, x + w / 2, y + h / 2); railStroke();
+}
+function arcText(s, cx, cy, r, size, color) {
+  ctx.save(); ctx.font = 'bold ' + size + 'px ' + SERIF; ctx.fillStyle = color; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  let a = Math.PI / 2 + ctx.measureText(s).width / r / 2;
+  for (const ch of s) { const w = ctx.measureText(ch).width; a -= w / 2 / r; ctx.save(); ctx.translate(cx + r * Math.cos(a), cy + r * Math.sin(a)); ctx.rotate(a - Math.PI / 2); ctx.fillText(ch, 0, 0); ctx.restore(); a -= w / 2 / r; }
+  ctx.restore();
+}
+
+// ---------------- chips ----------------
+const DENOMS = [1, 5, 25, 100, 500, 1000];
+const CHIPC = { 1: ['#ededed', '#2a5bb0', '#223'], 5: ['#c3232d', '#ffffff', '#fff'], 25: ['#1d8a3a', '#ffffff', '#fff'], 100: ['#1b1b1b', '#e8c14a', '#f4d67a'], 500: ['#6a2c9a', '#ffffff', '#fff'], 1000: ['#e0a21a', '#6b1320', '#4a0d10'] };
+function drawChip(x, y, r, d, alpha) {
+  const [c, s, tc] = CHIPC[d]; ctx.save(); if (alpha != null) ctx.globalAlpha = alpha;
+  ctx.beginPath(); circ(x, y + r * .14, r); ctx.fillStyle = shade(c, -.45); ctx.fill();
+  ctx.beginPath(); circ(x, y, r); ctx.fillStyle = c; ctx.fill();
+  ctx.save(); ctx.beginPath(); circ(x, y, r); ctx.clip(); ctx.fillStyle = s;
+  for (let i = 0; i < 6; i++) { const a = i * TAU / 6; ctx.save(); ctx.translate(x, y); ctx.rotate(a); ctx.fillRect(-r * .16, -r, r * .32, r * .26); ctx.restore(); }
+  ctx.restore();
+  ctx.beginPath(); circ(x, y, r * .68); ctx.fillStyle = shade(c, .12); ctx.fill();
+  ctx.setLineDash([3, 3]); ctx.strokeStyle = s; ctx.lineWidth = 1.2; ctx.beginPath(); circ(x, y, r * .6); ctx.stroke(); ctx.setLineDash([]);
+  T(d >= 1000 ? '1K' : String(d), x, y + 1, Math.round(r * (d >= 100 ? .56 : .66)), tc, 'center', 'bold');
+  ctx.restore();
+}
+function drawStack(x, y, amt, r, label) {
+  if (!amt || amt <= 0) return; r = r || 22; let a = amt; const chips = [];
+  for (let i = DENOMS.length - 1; i >= 0; i--) { const d = DENOMS[i]; while (a >= d && chips.length < 12) { chips.push(d); a -= d; } }
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 6; ctx.beginPath(); circ(x, y + 3, r); ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fill(); ctx.restore();
+  chips.forEach((d, i) => drawChip(x, y - i * (r * .17), r, d));
+  if (label !== false) {
+    ctx.font = 'bold 14px ' + SANS; const tw = ctx.measureText(fmt(amt)).width + 14;
+    rr(x - tw / 2, y + r + 4, tw, 20, 10); ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fill();
+    T(fmt(amt), x, y + r + 14, 14, '#ffe9a6');
+  }
+}
+function drawRack(g) {
+  const y0 = 724; const gr = ctx.createLinearGradient(0, y0, 0, H); gr.addColorStop(0, '#3a1f10'); gr.addColorStop(.1, '#24120a'); gr.addColorStop(1, '#120804');
+  ctx.fillStyle = gr; ctx.fillRect(0, y0, W, H - y0); ctx.fillStyle = '#c9a13b'; ctx.fillRect(0, y0, W, 2);
+  T('CHIP', 24, 748, 11, '#c9a13b', 'left', 'bold'); T('VALUE', 24, 762, 11, '#c9a13b', 'left', 'bold');
+  DENOMS.forEach((d, i) => {
+    const x = 104 + i * 64, sel = S.denom === d, afford = S.chips >= d, cy = sel ? 756 : 764;
+    if (sel) { ctx.save(); ctx.shadowColor = '#ffd76a'; ctx.shadowBlur = 20; ctx.beginPath(); circ(x, cy, 29); ctx.fillStyle = 'rgba(255,215,106,.35)'; ctx.fill(); ctx.restore(); }
+    drawChip(x, cy, 26, d, afford ? 1 : .35);
+    if (over(x - 28, 736, 56, 58) && afford) { ctx.beginPath(); circ(x, cy, 27); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); }
+    region(x - 30, 732, 60, 64, () => {
+      S.denom = d; Snd.chip();
+      if (g && g.single && (g.phase === 'bet' || g.phase === 'done')) g.place(g.single);
+    });
+  });
+  T(g && g.single ? 'Click a chip to bet it · right-click the spot to remove' : 'Pick a chip, then click a spot on the table · right-click removes', 104 + 5 * 32, 716, 12, 'rgba(255,233,166,.7)', 'center', 'normal');
+}
+
+// ---------------- cards ----------------
+const CW = 84, CH = 118, RANKS = ['', 'A', '2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K'];
+function suitShape(s, x, y, z, col) {
+  ctx.beginPath(); ctx.fillStyle = col;
+  if (s === 1) { ctx.moveTo(x, y + z * .5); ctx.lineTo(x - z * .49, y - z * .06); ctx.lineTo(x + z * .49, y - z * .06); ctx.closePath(); circ(x - z * .245, y - z * .17, z * .265); circ(x + z * .245, y - z * .17, z * .265); }
+  else if (s === 2) { ctx.moveTo(x, y - z * .52); ctx.lineTo(x + z * .38, y); ctx.lineTo(x, y + z * .52); ctx.lineTo(x - z * .38, y); ctx.closePath(); }
+  else if (s === 0) { ctx.moveTo(x, y - z * .52); ctx.lineTo(x + z * .49, y + z * .06); ctx.lineTo(x - z * .49, y + z * .06); ctx.closePath(); circ(x - z * .245, y + z * .12, z * .265); circ(x + z * .245, y + z * .12, z * .265); ctx.moveTo(x, y + z * .1); ctx.lineTo(x + z * .19, y + z * .52); ctx.lineTo(x - z * .19, y + z * .52); ctx.closePath(); }
+  else { circ(x, y - z * .25, z * .235); circ(x - z * .26, y + z * .08, z * .235); circ(x + z * .26, y + z * .08, z * .235); circ(x, y, z * .12); ctx.moveTo(x, y + z * .05); ctx.lineTo(x + z * .19, y + z * .52); ctx.lineTo(x - z * .19, y + z * .52); ctx.closePath(); }
+  ctx.fill();
+}
+function cardFace(r, s) {
+  rr(-CW / 2, -CH / 2, CW, CH, 8); ctx.fillStyle = '#fdfcf6'; ctx.fill(); ctx.strokeStyle = '#b9b3a3'; ctx.lineWidth = 1; ctx.stroke();
+  const col = (s === 1 || s === 2) ? '#c8102e' : '#141414', lab = RANKS[r];
+  for (let k = 0; k < 2; k++) {
+    ctx.save(); if (k) ctx.rotate(Math.PI);
+    T(lab, -CW / 2 + 13, -CH / 2 + 15, lab.length > 1 ? 16 : 19, col, 'center', 'bold', SERIF);
+    suitShape(s, -CW / 2 + 13, -CH / 2 + 33, 13, col); ctx.restore();
+  }
+  if (r > 10) {
+    rr(-23, -36, 46, 72, 4); ctx.fillStyle = s === 1 || s === 2 ? '#fde8e8' : '#ecefff'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke();
+    T(lab, 0, -10, 32, col, 'center', 'bold', SERIF); suitShape(s, 0, 20, 20, col);
+  } else suitShape(s, 0, 0, r === 1 ? 46 : 34, col);
+}
+function cardBack() {
+  rr(-CW / 2, -CH / 2, CW, CH, 8); ctx.fillStyle = '#fbf7ea'; ctx.fill();
+  rr(-CW / 2 + 5, -CH / 2 + 5, CW - 10, CH - 10, 5); ctx.fillStyle = '#8f1620'; ctx.fill();
+  ctx.save(); ctx.clip(); ctx.strokeStyle = 'rgba(232,120,110,.55)'; ctx.lineWidth = 1.5; ctx.beginPath();
+  for (let i = -140; i < 140; i += 10) { ctx.moveTo(i, -70); ctx.lineTo(i + 140, 70); ctx.moveTo(i, 70); ctx.lineTo(i + 140, -70); }
+  ctx.stroke(); ctx.restore();
+  rr(-CW / 2 + 9, -CH / 2 + 9, CW - 18, CH - 18, 4); ctx.strokeStyle = '#e8c14a'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.beginPath(); circ(0, 0, 13); ctx.fillStyle = '#8f1620'; ctx.fill(); ctx.strokeStyle = '#e8c14a'; ctx.stroke(); T('R', 0, 1, 15, '#e8c14a', 'center', 'bold', SERIF);
+}
+function drawCard(c) {
+  ctx.save(); ctx.translate(c.x, c.y); ctx.rotate(c.rot || 0);
+  const sc = c.sc || 1, sx = Math.abs(1 - 2 * c.f); ctx.scale(Math.max(.03, sx) * sc, sc);
+  ctx.shadowColor = 'rgba(0,0,0,.45)'; ctx.shadowBlur = 8; ctx.shadowOffsetY = 3; rr(-CW / 2, -CH / 2, CW, CH, 8); ctx.fillStyle = '#fff'; ctx.fill(); ctx.shadowColor = 'transparent';
+  if (c.f >= .5) cardFace(c.r, c.s); else cardBack();
+  if (c.glow > 0) { rr(-CW / 2 - 2, -CH / 2 - 2, CW + 4, CH + 4, 9); ctx.strokeStyle = `rgba(255,215,90,${c.glow})`; ctx.lineWidth = 4; ctx.stroke(); }
+  if (c.dim) { rr(-CW / 2, -CH / 2, CW, CH, 8); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill(); }
+  ctx.restore();
+}
+class Card {
+  constructor(c, x, y) { this.r = c.r; this.s = c.s; this.x = this.tx = x; this.y = this.ty = y; this.f = 0; this.up = false; this.rot = -.4; this.tr = 0; this.glow = 0; this.sc = 1; this.dim = false; }
+  upd(dt) { const k = Math.min(1, dt * 9); this.x += (this.tx - this.x) * k; this.y += (this.ty - this.y) * k; this.rot += (this.tr - this.rot) * k; const tf = this.up ? 1 : 0, d = tf - this.f; this.f += Math.sign(d) * Math.min(Math.abs(d), dt * 4.5); }
+  draw() { drawCard(this); }
+}
+function drawShoe(x, y) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-.12);
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 12; rr(-60, -38, 120, 76, 8); ctx.fillStyle = '#2b1609'; ctx.fill(); ctx.shadowColor = 'transparent';
+  ctx.save(); ctx.translate(-12, -2); ctx.scale(.62, .5); cardBack(); ctx.restore();
+  rr(-60, -38, 120, 76, 8); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+  rr(20, -30, 34, 60, 6); ctx.fillStyle = '#4a2812'; ctx.fill(); ctx.stroke();
+  ctx.restore(); T('SHOE', x, y + 50, 11, 'rgba(232,193,74,.6)');
+}
+function drawDealerTray(x, y) {
+  rr(x - 190, y - 18, 380, 40, 8); ctx.fillStyle = 'rgba(0,0,0,.45)'; ctx.fill(); ctx.strokeStyle = 'rgba(201,161,59,.6)'; ctx.lineWidth = 1.5; ctx.stroke();
+  const cols = [1, 5, 25, 100, 500, 1000, 1000, 500, 100, 25, 5, 1];
+  cols.forEach((d, i) => { const cx = x - 165 + i * 30; ctx.fillStyle = CHIPC[d][0]; ctx.fillRect(cx - 12, y - 12, 24, 28); ctx.fillStyle = 'rgba(0,0,0,.25)'; for (let k = 0; k < 7; k++) ctx.fillRect(cx - 12, y - 12 + k * 4, 24, 1); ctx.fillStyle = CHIPC[d][1]; ctx.fillRect(cx - 3, y - 12, 6, 28); });
+}
+
+// ---------------- dice ----------------
+const PIPS = { 1: [[0, 0]], 2: [[-1, -1], [1, 1]], 3: [[-1, -1], [0, 0], [1, 1]], 4: [[-1, -1], [1, -1], [-1, 1], [1, 1]], 5: [[-1, -1], [1, -1], [0, 0], [-1, 1], [1, 1]], 6: [[-1, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [1, 1]] };
+function drawDie(x, y, sz, face, ang) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang || 0);
+  ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 10; ctx.shadowOffsetY = 4;
+  rr(-sz / 2, -sz / 2, sz, sz, sz * .18); const g = ctx.createLinearGradient(-sz / 2, -sz / 2, sz / 2, sz / 2); g.addColorStop(0, '#ff5a5a'); g.addColorStop(1, '#9a0c14');
+  ctx.fillStyle = g; ctx.fill(); ctx.shadowColor = 'transparent'; ctx.strokeStyle = 'rgba(255,200,200,.6)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.fillStyle = '#fff'; for (const [px, py] of PIPS[face]) { ctx.beginPath(); circ(px * sz * .27, py * sz * .27, sz * .09); ctx.fill(); }
+  ctx.restore();
+}
+
+// ---------------- particles ----------------
+const PARTS = [];
+function burst(x, y, n, colors, sp, grav, size) { for (let i = 0; i < n; i++) { const a = rnd() * TAU, v = sp * (.3 + rnd()); PARTS.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - (grav ? sp * .5 : 0), l: 1 + rnd() * .8, c: colors[rint(colors.length)], s: (size || 3) * (.6 + rnd()), g: grav || 0 }); } }
+function updParts(dt) { for (let i = PARTS.length - 1; i >= 0; i--) { const p = PARTS[i]; p.vy += p.g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= .99; p.l -= dt; if (p.l <= 0) PARTS.splice(i, 1); } }
+function drawParts() { for (const p of PARTS) { ctx.globalAlpha = clamp(p.l, 0, 1); ctx.fillStyle = p.c; ctx.beginPath(); circ(p.x, p.y, p.s); ctx.fill(); } ctx.globalAlpha = 1; }
+
+// =====================================================================
+//  BASE GAME
+// =====================================================================
+class Game {
+  constructor() { this.q = []; this.clock = 0; this.bets = {}; this.last = null; this.phase = 'bet'; this.banner = null; this.single = null; }
+  after(ms, fn) { this.q.push({ at: this.clock + ms / 1000, fn }); }
+  tick(dt) {
+    this.clock += dt;
+    for (let i = 0; i < this.q.length;) { const t = this.q[i]; if (t.at <= this.clock) { this.q.splice(i, 1); t.fn(); } else i++; }
+    if (this.update) this.update(dt);
+    if (this.cards) for (const c of this.cards()) c.upd(dt);
+    if (this.banner) this.banner.t += dt;
+  }
+  busy() { return this.q.length > 0; }
+  onTable() { let s = 0; for (const k in this.bets) s += this.bets[k]; return s; }
+  canPlace() { return this.phase === 'bet'; }
+  canRemove() { return this.phase === 'bet'; }
+  place(spot) {
+    if (this.phase === 'done' && !this.busy()) this.newRound();
+    if (!this.canPlace(spot)) return;
+    const d = S.denom;
+    if (S.chips < d) { toast(S.chips > 0 ? 'Not enough chips for a ' + fmt(d) + ' chip. Pick a smaller one.' : 'You have no chips left to bet'); return; }
+    S.chips -= d; this.bets[spot] = (this.bets[spot] || 0) + d; Snd.chip();
+  }
+  remove(spot) { if (!this.canRemove(spot) || !this.bets[spot]) return; S.chips += this.bets[spot]; delete this.bets[spot]; Snd.chip(); }
+  clear() { let any = false; for (const k in this.bets) if (this.canRemove(k)) { S.chips += this.bets[k]; delete this.bets[k]; any = true; } if (any) Snd.chip(); }
+  rebet() {
+    if (!this.last) { toast('No previous bet to repeat'); return false; }
+    if (this.phase === 'done') this.newRound();
+    let tot = 0; for (const k in this.last) if (this.canPlace(k)) tot += this.last[k];
+    if (tot > S.chips) { toast('Not enough chips to repeat that ' + fmt(tot) + ' bet'); return false; }
+    for (const k in this.last) if (this.canPlace(k)) { S.chips -= this.last[k]; this.bets[k] = (this.bets[k] || 0) + this.last[k]; }
+    Snd.chip(); return true;
+  }
+  newRound() { this.phase = 'bet'; this.bets = {}; this.banner = null; if (this.reset) this.reset(); }
+  canLeave() { return (this.phase === 'bet' || this.phase === 'done') && !this.busy(); }
+  leave() { if (this.phase === 'bet') this.clear(); }
+  say(text, color, sub, life) { this.banner = { text, color: color || '#ffd86b', sub, t: 0, life }; }
+  drawBanner(y) {
+    const b = this.banner; if (!b) return; if (b.life && b.t > b.life) return;
+    const a = b.life ? clamp((b.life - b.t) * 2, 0, 1) : 1, s = Math.min(1, .6 + b.t * 3);
+    ctx.save(); ctx.globalAlpha = a; ctx.translate(640, y); ctx.scale(s, s);
+    ctx.font = 'bold 40px ' + SERIF; const w = Math.max(ctx.measureText(b.text).width + 70, 320);
+    rr(-w / 2, -40, w, b.sub ? 86 : 70, 16); ctx.fillStyle = 'rgba(8,4,2,.82)'; ctx.fill(); ctx.strokeStyle = b.color; ctx.lineWidth = 2; ctx.stroke();
+    ctx.shadowColor = b.color; ctx.shadowBlur = 16; T(b.text, 0, -6, 40, b.color, 'center', 'bold', SERIF); ctx.shadowBlur = 0;
+    if (b.sub) T(b.sub, 0, 30, 17, '#f3e6c0', 'center', 'normal');
+    ctx.restore();
+  }
+  betSpot(id, x, y, r, label, amount) {
+    const can = this.canPlace(id) || (this.phase === 'done' && !this.busy()), hov = can && over(x - r, y - r, 2 * r, 2 * r);
+    ctx.beginPath(); circ(x, y, r); ctx.fillStyle = hov ? 'rgba(255,230,150,.16)' : 'rgba(0,0,0,.12)'; ctx.fill();
+    ctx.lineWidth = 3; ctx.strokeStyle = hov ? '#ffe9a6' : 'rgba(232,193,74,.8)'; ctx.stroke();
+    ctx.beginPath(); circ(x, y, r - 7); ctx.lineWidth = 1; ctx.strokeStyle = 'rgba(232,193,74,.45)'; ctx.stroke();
+    if (!amount) T(label, x, y, 13, 'rgba(255,233,166,.75)', 'center', 'bold');
+    drawStack(x, y, amount);
+    if (can) region(x - r, y - r, 2 * r, 2 * r, b => b === 2 ? this.remove(id) : this.place(id), true);
+  }
+}
+
+// =====================================================================
+//  BLACKJACK
+// =====================================================================
+function bjVal(cards) { let t = 0, a = 0; for (const c of cards) { if (c.r === 1) { a++; t += 11; } else t += Math.min(10, c.r); } while (t > 21 && a) { t -= 10; a--; } return { t, soft: a > 0 }; }
+class Blackjack extends Game {
+  constructor() { super(); this.single = 'main'; this.shoe = newShoe(6); this.reset(); }
+  reset() { this.dealer = []; this.hands = []; this.active = -1; this.hole = null; }
+  cards() { return this.dealer.concat(...this.hands.map(h => h.cards)); }
+  pull() { if (this.shoe.length < 60) { this.shoe = newShoe(6); toast('The dealer shuffles a fresh 6-deck shoe'); } return this.shoe.pop(); }
+  give(arr, up) { const c = new Card(this.pull(), 1080, 120); arr.push(c); if (up) this.after(160, () => { c.up = true; }); this.layout(); Snd.card(); return c; }
+  layout() {
+    const n = this.dealer.length; this.dealer.forEach((c, i) => { c.tx = 640 + (i - (n - 1) / 2) * 62; c.ty = 190; c.tr = 0; });
+    this.hands.forEach((h, k) => { h.x = this.hands.length === 1 ? 640 : (k === 0 ? 440 : 840); const m = h.cards.length; h.cards.forEach((c, i) => { c.tx = h.x + (i - (m - 1) / 2) * 36; c.ty = 440 - i * 4; c.tr = 0; }); });
+  }
+  isBJ(c) { return c.length === 2 && bjVal(c).t === 21; }
+  onTable() { if (this.phase === 'bet') return super.onTable(); if (this.phase === 'done') return 0; return this.hands.reduce((s, h) => s + h.bet, 0); }
+  deal() {
+    if (this.phase === 'done') { if (!this.rebet()) return; }
+    const b = this.bets.main || 0; if (this.phase !== 'bet') return;
+    if (!b) { toast('Place a bet in the circle first'); return; }
+    this.last = { main: b }; this.reset(); this.phase = 'deal';
+    const h = { cards: [], bet: b, done: false, res: null, x: 640 }; this.hands = [h];
+    this.after(0, () => this.give(h.cards, true)); this.after(450, () => this.give(this.dealer, true));
+    this.after(900, () => this.give(h.cards, true)); this.after(1350, () => { this.hole = this.give(this.dealer, false); });
+    this.after(1950, () => this.check());
+  }
+  check() {
+    const h = this.hands[0], up = this.dealer[0], dBJ = this.isBJ(this.dealer), pBJ = this.isBJ(h.cards);
+    if ((up.r === 1 || up.r >= 10) && dBJ) { this.hole.up = true; Snd.card(); h.done = true; this.after(800, () => this.settle()); return; }
+    if (pBJ) { h.done = true; this.hole.up = true; Snd.card(); this.after(800, () => this.settle()); return; }
+    this.next();
+  }
+  next() {
+    const i = this.hands.findIndex(h => !h.done);
+    if (i < 0) { this.dealerTurn(); return; }
+    this.active = i; const h = this.hands[i];
+    if (h.cards.length < 2) {
+      this.phase = 'deal'; this.give(h.cards, true);
+      this.after(550, () => { if (h.aces || bjVal(h.cards).t === 21) { h.done = true; this.next(); } else this.phase = 'play'; });
+      return;
+    }
+    if (bjVal(h.cards).t === 21) { h.done = true; this.next(); return; }
+    this.phase = 'play';
+  }
+  cur() { return this.hands[this.active]; }
+  hit() {
+    if (this.phase !== 'play' || this.busy()) return; const h = this.cur(); this.give(h.cards, true);
+    this.after(450, () => { const v = bjVal(h.cards).t; if (v > 21) { h.res = 'BUST'; h.done = true; Snd.lose(); this.after(450, () => this.next()); } else if (v === 21) { h.done = true; this.next(); } });
+  }
+  stand() { if (this.phase !== 'play' || this.busy()) return; this.cur().done = true; this.next(); }
+  canDouble() { const h = this.cur(); return this.phase === 'play' && !this.busy() && h && h.cards.length === 2 && S.chips >= h.bet; }
+  double() {
+    if (!this.canDouble()) return; const h = this.cur(); S.chips -= h.bet; h.bet *= 2; h.dbl = true; Snd.chip(); this.give(h.cards, true);
+    const c = h.cards[h.cards.length - 1]; c.tr = Math.PI / 2; c.ty = 450;
+    this.after(550, () => { if (bjVal(h.cards).t > 21) { h.res = 'BUST'; Snd.lose(); } h.done = true; this.after(350, () => this.next()); });
+  }
+  canSplit() { const h = this.cur(); return this.phase === 'play' && !this.busy() && this.hands.length === 1 && h && h.cards.length === 2 && Math.min(10, h.cards[0].r) === Math.min(10, h.cards[1].r) && S.chips >= h.bet; }
+  split() {
+    if (!this.canSplit()) return; const h = this.cur(); S.chips -= h.bet; Snd.chip();
+    const c = h.cards.pop(), h2 = { cards: [c], bet: h.bet, done: false, res: null, x: 840 };
+    if (c.r === 1) h.aces = h2.aces = true;
+    this.hands.push(h2); this.layout(); this.phase = 'deal'; this.after(400, () => this.next());
+  }
+  dealerTurn() {
+    this.phase = 'dealer'; this.active = -1; this.hole.up = true; Snd.card();
+    const live = this.hands.some(h => h.res !== 'BUST');
+    const step = () => { const v = bjVal(this.dealer).t; if (live && v < 17) { this.give(this.dealer, true); this.after(750, step); } else this.after(500, () => this.settle()); };
+    this.after(750, step);
+  }
+  settle() {
+    const dv = bjVal(this.dealer).t, dBJ = this.isBJ(this.dealer); let net = 0;
+    for (const h of this.hands) {
+      const pv = bjVal(h.cards).t, nat = this.hands.length === 1 && this.isBJ(h.cards); let ret = 0;
+      if (h.res === 'BUST') ret = 0;
+      else if (nat && !dBJ) { ret = h.bet + Math.floor(h.bet * 1.5); h.res = 'BLACKJACK!'; }
+      else if (dBJ) { if (nat) { ret = h.bet; h.res = 'PUSH'; } else h.res = 'LOSE'; }
+      else if (dv > 21 || pv > dv) { ret = h.bet * 2; h.res = 'WIN'; }
+      else if (pv === dv) { ret = h.bet; h.res = 'PUSH'; }
+      else h.res = 'LOSE';
+      S.chips += ret; net += ret - h.bet; popNet(h.x, 560, ret - h.bet);
+    }
+    this.phase = 'done';
+    const sub = dBJ ? 'Dealer has Blackjack' : dv > 21 ? 'Dealer busts with ' + dv : 'Dealer stands on ' + dv;
+    if (net > 0) { this.say(this.hands.some(h => h.res === 'BLACKJACK!') ? 'BLACKJACK! +' + fmt(net) : 'YOU WIN ' + fmt(net), '#7dff8a', sub); Snd.win(); }
+    else if (net < 0) { this.say('DEALER WINS', '#ff7b7b', this.hands.every(h => h.res === 'BUST') ? 'Busted' : sub); Snd.lose(); }
+    else this.say('PUSH', '#ffe08a', 'Your bet is returned');
+  }
+  hot(k) {
+    if (k === ' ' || k === 'enter') { if (this.phase === 'bet' || this.phase === 'done') this.deal(); else if (this.phase === 'play') this.stand(); }
+    if (k === 'h') this.hit(); if (k === 's') this.stand(); if (k === 'd') this.double(); if (k === 'p') this.split();
+  }
+  draw() {
+    roomBg(); halfTable('#0e6b3a');
+    drawDealerTray(640, 86); drawShoe(1080, 118);
+    rr(150, 92, 100, 60, 6); ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fill(); ctx.strokeStyle = 'rgba(201,161,59,.5)'; ctx.stroke(); T('DISCARD', 200, 122, 11, 'rgba(232,193,74,.6)');
+    arcText('BLACKJACK PAYS 3 TO 2', 640, 66, 300, 26, 'rgba(255,221,120,.85)');
+    arcText('DEALER MUST DRAW TO 16 AND STAND ON ALL 17s', 640, 66, 270, 14, 'rgba(255,255,255,.55)');
+    if (this.phase === 'bet' || (this.phase === 'done' && !this.hands.length)) this.betSpot('main', 640, 612, 46, 'BET', this.bets.main);
+    else if (this.phase === 'done') { this.hands.forEach(h => { this.betSpot('main', h.x, 612, 46, 'BET', 0); drawStack(h.x, 612, h.bet); }); }
+    else this.hands.forEach(h => { ctx.beginPath(); circ(h.x, 612, 46); ctx.strokeStyle = 'rgba(232,193,74,.8)'; ctx.lineWidth = 3; ctx.stroke(); drawStack(h.x, 612, h.bet); });
+    for (const c of this.cards()) c.draw();
+    if (this.dealer.length) { const vis = this.dealer.filter(c => c.f >= .5); if (vis.length) this.pill(640, 272, 'DEALER ' + bjVal(vis).t, '#fff'); }
+    this.hands.forEach((h, i) => {
+      if (!h.cards.length) return; const v = bjVal(h.cards);
+      const label = h.res || ((v.soft && v.t < 21 ? 'soft ' : '') + v.t);
+      const col = h.res === 'WIN' || h.res === 'BLACKJACK!' ? '#7dff8a' : h.res === 'BUST' || h.res === 'LOSE' ? '#ff7b7b' : h.res === 'PUSH' ? '#ffe08a' : '#fff';
+      this.pill(h.x, 530, h.res ? label + (h.res !== 'BUST' ? ' · ' + v.t : '') : label, col);
+      if (i === this.active && (this.phase === 'play')) { const bob = Math.sin(S.time * 6) * 4; ctx.fillStyle = '#ffd76a'; ctx.beginPath(); ctx.moveTo(h.x - 12, 352 + bob); ctx.lineTo(h.x + 12, 352 + bob); ctx.lineTo(h.x, 368 + bob); ctx.fill(); }
+    });
+    this.drawBanner(330);
+    drawRack(this);
+    const by = 742, bh = 46;
+    if (this.phase === 'bet') {
+      button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.onTable() > 0, color: '#8a6a4a' });
+      button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: !!this.last && !this.onTable(), color: '#8a6a4a' });
+      button(1050, by, 190, bh, 'DEAL  ▸', () => this.deal(), { enabled: this.onTable() > 0, color: '#2f9e55', text: '#fff', size: 20 });
+    } else if (this.phase === 'play' || this.phase === 'deal' || this.phase === 'dealer') {
+      const en = this.phase === 'play' && !this.busy();
+      button(560, by, 150, bh, 'HIT  (H)', () => this.hit(), { enabled: en, color: '#2f9e55', text: '#fff' });
+      button(722, by, 150, bh, 'STAND  (S)', () => this.stand(), { enabled: en, color: '#b23a3a', text: '#fff' });
+      button(884, by, 170, bh, 'DOUBLE  (D)', () => this.double(), { enabled: this.canDouble() });
+      button(1066, by, 170, bh, 'SPLIT  (P)', () => this.split(), { enabled: this.canSplit() });
+    } else {
+      button(560, by, 180, bh, 'NEW BET', () => this.newRound(), { color: '#8a6a4a' });
+      button(1000, by, 240, bh, 'REBET & DEAL  ▸', () => this.deal(), { color: '#2f9e55', text: '#fff', enabled: !!this.last && S.chips >= this.last.main });
+    }
+  }
+  pill(x, y, t, col) { ctx.font = 'bold 16px ' + SANS; const w = ctx.measureText(t).width + 26; rr(x - w / 2, y - 14, w, 28, 14); ctx.fillStyle = 'rgba(0,0,0,.72)'; ctx.fill(); ctx.strokeStyle = 'rgba(232,193,74,.6)'; ctx.lineWidth = 1; ctx.stroke(); T(t, x, y + 1, 16, col); }
+}
+
+// =====================================================================
+//  POKER EVALUATION + CASINO HOLD'EM
+// =====================================================================
+const HAND_NAMES = ['High Card', 'Pair', 'Two Pair', 'Three of a Kind', 'Straight', 'Flush', 'Full House', 'Four of a Kind', 'Straight Flush', 'Royal Flush'];
+const RNAME = { 2: '2s', 3: '3s', 4: '4s', 5: '5s', 6: '6s', 7: '7s', 8: '8s', 9: '9s', 10: '10s', 11: 'Jacks', 12: 'Queens', 13: 'Kings', 14: 'Aces' };
+function eval5(cs) {
+  const rs = cs.map(c => c.r === 1 ? 14 : c.r).sort((a, b) => b - a), fl = cs.every(c => c.s === cs[0].s), cnt = {};
+  rs.forEach(r => cnt[r] = (cnt[r] || 0) + 1);
+  const gr = Object.keys(cnt).map(Number).sort((a, b) => cnt[b] - cnt[a] || b - a);
+  let st = 0; if (gr.length === 5) { if (rs[0] - rs[4] === 4) st = rs[0]; else if (rs[0] === 14 && rs[1] === 5) st = 5; }
+  let cat, tb;
+  if (st && fl) { cat = st === 14 ? 9 : 8; tb = [st]; }
+  else if (cnt[gr[0]] === 4) { cat = 7; tb = gr; }
+  else if (cnt[gr[0]] === 3 && cnt[gr[1]] === 2) { cat = 6; tb = gr; }
+  else if (fl) { cat = 5; tb = rs; }
+  else if (st) { cat = 4; tb = [st]; }
+  else if (cnt[gr[0]] === 3) { cat = 3; tb = gr; }
+  else if (cnt[gr[0]] === 2 && cnt[gr[1]] === 2) { cat = 2; tb = gr; }
+  else if (cnt[gr[0]] === 2) { cat = 1; tb = gr; }
+  else { cat = 0; tb = rs; }
+  let score = cat; for (let i = 0; i < 5; i++) score = score * 15 + (tb[i] || 0);
+  return { cat, tb, score };
+}
+function best7(cards) {
+  let best = null; const n = cards.length, combo = [];
+  (function rec(st) {
+    if (combo.length === 5) { const e = eval5(combo.map(i => cards[i])); if (!best || e.score > best.score) { best = e; best.cards = combo.map(i => cards[i]); } return; }
+    for (let i = st; i < n; i++) { combo.push(i); rec(i + 1); combo.pop(); }
+  })(0);
+  best.name = best.cat === 1 ? 'Pair of ' + RNAME[best.tb[0]] : best.cat === 3 ? 'Three ' + RNAME[best.tb[0]] : best.cat === 0 ? RANKS[best.tb[0] === 14 ? 1 : best.tb[0]] + ' High' : HAND_NAMES[best.cat];
+  return best;
+}
+const ANTE_PAY = [1, 1, 1, 1, 1, 2, 3, 10, 20, 100];
+class Holdem extends Game {
+  constructor() { super(); this.single = 'ante'; this.reset(); }
+  reset() { this.pc = []; this.dc = []; this.bc = []; this.pRes = null; this.dRes = null; this.folded = false; }
+  cards() { return this.dc.concat(this.bc, this.pc); }
+  canPlace(s) { return this.phase === 'bet' && s === 'ante'; }
+  onTable() { return this.phase === 'done' ? 0 : super.onTable(); }
+  put(arr, x, y, up, d) { this.after(d, () => { const c = new Card(this.deck.pop(), 1080, 120); arr.push(c); c.tx = x; c.ty = y; if (up) this.after(160, () => { c.up = true; }); Snd.card(); }); }
+  deal() {
+    if (this.phase === 'done') { if (!this.rebet()) return; }
+    if (this.phase !== 'bet') return;
+    const a = this.bets.ante || 0; if (!a) { toast('Place an ante bet first'); return; }
+    if (S.chips < a * 2) { toast('You need ' + fmt(a * 2) + ' in reserve to be able to call. Lower your ante.'); return; }
+    this.last = { ante: a }; this.reset(); this.phase = 'deal'; this.deck = newShoe(1);
+    this.put(this.pc, 590, 548, true, 0); this.put(this.dc, 590, 168, false, 300); this.put(this.pc, 690, 548, true, 600); this.put(this.dc, 690, 168, false, 900);
+    for (let i = 0; i < 3; i++) this.put(this.bc, 440 + i * 100, 338, true, 1350 + i * 260);
+    this.after(2400, () => { this.phase = 'decide'; this.pRes = best7(this.pc.concat(this.bc)); });
+  }
+  fold() { if (this.phase !== 'decide') return; this.folded = true; this.phase = 'reveal'; this.runout(); }
+  call() {
+    if (this.phase !== 'decide') return; const a = this.bets.ante;
+    S.chips -= 2 * a; this.bets.call = 2 * a; Snd.chip(); this.phase = 'reveal'; this.runout();
+  }
+  runout() {
+    this.put(this.bc, 740, 338, true, 300); this.put(this.bc, 840, 338, true, 800);
+    this.after(1500, () => { this.dc.forEach(c => c.up = true); Snd.card(); });
+    this.after(2300, () => this.settle());
+  }
+  settle() {
+    const p = best7(this.pc.concat(this.bc)), d = best7(this.dc.concat(this.bc)); this.pRes = p; this.dRes = d;
+    this.cards().forEach(c => { c.glow = p.cards.includes(c) && this.pc.concat(this.bc).includes(c) ? .9 : 0; });
+    const a = this.bets.ante, c = this.bets.call || 0;
+    this.phase = 'done';
+    if (this.folded) { popNet(560, 640, -a); this.say('YOU FOLDED', '#ffb86b', 'Ante lost · you had ' + p.name + ', dealer had ' + d.name); Snd.lose(); return; }
+    const q = d.cat >= 2 || (d.cat === 1 && d.tb[0] >= 4), mult = ANTE_PAY[p.cat]; let ret = 0, msg, sub;
+    if (!q) { ret = a + a * mult + c; msg = "DEALER DOESN'T QUALIFY"; sub = 'Ante pays ' + mult + ' to 1 · call is returned'; }
+    else if (p.score > d.score) { ret = a + a * mult + c * 2; msg = 'YOU WIN!'; sub = p.name + ' beats ' + d.name; }
+    else if (p.score === d.score) { ret = a + c; msg = 'PUSH'; sub = 'Both hands: ' + p.name; }
+    else { msg = 'DEALER WINS'; sub = d.name + ' beats ' + p.name; }
+    S.chips += ret; const net = ret - a - c; popNet(640, 640, net);
+    this.say(msg, net > 0 ? '#7dff8a' : net < 0 ? '#ff7b7b' : '#ffe08a', sub); net > 0 ? (p.cat >= 6 ? Snd.big() : Snd.win()) : net < 0 ? Snd.lose() : 0;
+  }
+  hot(k) { if (k === ' ' || k === 'enter') { if (this.phase === 'bet' || this.phase === 'done') this.deal(); else if (this.phase === 'decide') this.call(); } if (k === 'f') this.fold(); if (k === 'c') this.call(); }
+  draw() {
+    roomBg(); halfTable('#11406e'); drawShoe(1080, 118); drawDealerTray(640, 86);
+    arcText("CASINO HOLD'EM", 640, 66, 300, 26, 'rgba(255,221,120,.85)');
+    arcText('DEALER QUALIFIES WITH A PAIR OF 4s OR BETTER', 640, 66, 272, 14, 'rgba(255,255,255,.55)');
+    // paytable printed on felt
+    T('ANTE BONUS', 250, 240, 15, 'rgba(255,221,120,.85)', 'center', 'bold', SERIF);
+    [['Royal Flush', '100:1'], ['Straight Flush', '20:1'], ['Four of a Kind', '10:1'], ['Full House', '3:1'], ['Flush', '2:1'], ['Straight or less', '1:1']].forEach((r, i) => {
+      const hl = this.phase === 'done' && this.pRes && !this.folded && ANTE_PAY[this.pRes.cat] === +r[1].split(':')[0] && (i < 5 ? HAND_NAMES[this.pRes.cat] === r[0] : this.pRes.cat <= 4);
+      T(r[0], 172, 268 + i * 24, 13, hl ? '#ffe9a6' : 'rgba(255,255,255,.6)', 'left', hl ? 'bold' : 'normal'); T(r[1], 330, 268 + i * 24, 13, hl ? '#ffe9a6' : 'rgba(255,255,255,.6)', 'right', 'bold');
+    });
+    for (let i = 0; i < 5; i++) { rr(398 + i * 100, 279, CW, CH, 8); ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 2; ctx.stroke(); }
+    T('DEALER', 640, 245, 13, 'rgba(255,255,255,.5)'); T('YOUR HAND', 800, 548, 13, 'rgba(255,255,255,.5)', 'left');
+    this.betSpot('ante', 520, 645, 38, 'ANTE', this.bets.ante);
+    ctx.beginPath(); circ(760, 645, 38); ctx.strokeStyle = 'rgba(232,193,74,.6)'; ctx.lineWidth = 3; ctx.stroke();
+    if (!this.bets.call) T('CALL', 760, 645, 13, 'rgba(255,233,166,.6)'); else drawStack(760, 645, this.bets.call);
+    T('×2', 760, 600, 12, 'rgba(255,233,166,.5)');
+    for (const c of this.cards()) c.draw();
+    if (this.pRes && (this.phase === 'decide' || this.phase === 'done' || this.phase === 'reveal')) { const r = this.phase === 'done' ? this.pRes : best7(this.pc.concat(this.bc.filter(c => c.f >= .5))); Blackjack.prototype.pill(640, 426, r.name, '#fff'); }
+    if (this.dRes && this.phase === 'done') Blackjack.prototype.pill(640, 250, 'Dealer: ' + this.dRes.name, '#fff');
+    this.drawBanner(452);
+    drawRack(this);
+    const by = 742, bh = 46;
+    if (this.phase === 'bet') {
+      button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.onTable() > 0, color: '#8a6a4a' });
+      button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: !!this.last && !this.onTable(), color: '#8a6a4a' });
+      button(1050, by, 190, bh, 'DEAL  ▸', () => this.deal(), { enabled: this.onTable() > 0, color: '#2f9e55', text: '#fff', size: 20 });
+    } else if (this.phase === 'decide' || this.phase === 'deal' || this.phase === 'reveal') {
+      const en = this.phase === 'decide';
+      button(700, by, 180, bh, 'FOLD  (F)', () => this.fold(), { enabled: en, color: '#b23a3a', text: '#fff' });
+      button(900, by, 330, bh, 'CALL ' + (this.bets.ante ? fmt(this.bets.ante * 2) : '') + '  (C)', () => this.call(), { enabled: en, color: '#2f9e55', text: '#fff', size: 19 });
+    } else {
+      button(560, by, 180, bh, 'NEW BET', () => this.newRound(), { color: '#8a6a4a' });
+      button(1000, by, 240, bh, 'REBET & DEAL  ▸', () => this.deal(), { color: '#2f9e55', text: '#fff', enabled: !!this.last && S.chips >= this.last.ante * 3 });
+    }
+  }
+}
+
+// =====================================================================
+//  BACCARAT
+// =====================================================================
+class Baccarat extends Game {
+  constructor() { super(); this.shoe = newShoe(8); this.road = []; this.reset(); }
+  reset() { this.pc = []; this.bc = []; this.winner = null; }
+  cards() { return this.pc.concat(this.bc); }
+  bv(c) { return c.r >= 10 ? 0 : c.r; }
+  tot(a) { return a.reduce((s, c) => s + this.bv(c), 0) % 10; }
+  onTable() { return this.phase === 'done' ? 0 : super.onTable(); }
+  pull() { if (this.shoe.length < 20) { this.shoe = newShoe(8); toast('New 8-deck shoe'); } return this.shoe.pop(); }
+  deal() {
+    if (this.phase === 'done') { if (!this.rebet()) return; }
+    if (this.phase !== 'bet') return;
+    if (!this.onTable()) { toast('Bet on Player, Banker or Tie first'); return; }
+    this.last = { ...this.bets }; this.reset(); this.phase = 'deal';
+    const P = [this.pull()], B = [this.pull()]; P.push(this.pull()); B.push(this.pull());
+    const pt = this.tot(P), bt = this.tot(B); let p3 = null, b3 = null;
+    if (pt < 8 && bt < 8) {
+      if (pt <= 5) { p3 = this.pull(); P.push(p3); }
+      if (!p3) { if (bt <= 5) { b3 = this.pull(); B.push(b3); } }
+      else { const v = this.bv(p3); let d = false; if (bt <= 2) d = true; else if (bt === 3) d = v !== 8; else if (bt === 4) d = v >= 2 && v <= 7; else if (bt === 5) d = v >= 4 && v <= 7; else if (bt === 6) d = v === 6 || v === 7; if (d) { b3 = this.pull(); B.push(b3); } }
+    }
+    const put = (arr, card, x, y, rot, d) => this.after(d, () => { const c = new Card(card, 1080, 120); c.tx = x; c.ty = y; c.tr = rot; arr.push(c); Snd.card(); this.after(260, () => { c.up = true; }); });
+    put(this.pc, P[0], 400, 260, 0, 0); put(this.bc, B[0], 820, 260, 0, 450); put(this.pc, P[1], 490, 260, 0, 900); put(this.bc, B[1], 910, 260, 0, 1350);
+    let t = 2300;
+    if (pt >= 8 || bt >= 8) this.after(t - 300, () => toast('Natural ' + Math.max(pt, bt) + '!'));
+    if (p3) { put(this.pc, p3, 300, 268, Math.PI / 2, t); t += 900; }
+    if (b3) { put(this.bc, b3, 1020, 268, Math.PI / 2, t); t += 900; }
+    this.after(t + 300, () => this.settle(this.tot(P), this.tot(B)));
+  }
+  settle(pt, bt) {
+    const w = pt > bt ? 'P' : bt > pt ? 'B' : 'T'; this.winner = w; this.road.push(w); if (this.road.length > 40) this.road.shift();
+    let ret = 0, staked = 0; const pos = { player: 440, tie: 640, banker: 840 };
+    for (const k in this.bets) {
+      const v = this.bets[k]; staked += v; let r = 0;
+      if (k === 'player') r = w === 'P' ? v * 2 : w === 'T' ? v : 0;
+      if (k === 'banker') r = w === 'B' ? v + Math.floor(v * .95) : w === 'T' ? v : 0;
+      if (k === 'tie') r = w === 'T' ? v * 9 : 0;
+      ret += r; popNet(pos[k], 480, r - v);
+    }
+    S.chips += ret; const net = ret - staked; this.phase = 'done';
+    const col = w === 'P' ? '#6fb6ff' : w === 'B' ? '#ff7b7b' : '#7dff8a';
+    this.say(w === 'T' ? 'TIE ' + pt + ' – ' + bt : (w === 'P' ? 'PLAYER' : 'BANKER') + ' WINS ' + Math.max(pt, bt) + ' – ' + Math.min(pt, bt), col, net > 0 ? 'You win ' + fmt(net) : net < 0 ? 'You lose ' + fmt(-net) : 'Your bets push');
+    net > 0 ? Snd.win() : net < 0 ? Snd.lose() : 0;
+  }
+  hot(k) { if (k === ' ' || k === 'enter') this.deal(); }
+  box(id, x, y, w, h, label, sub, col) {
+    const can = this.canPlace(id) || (this.phase === 'done' && !this.busy()), hov = can && over(x, y, w, h);
+    const win = this.phase === 'done' && ((id === 'player' && this.winner === 'P') || (id === 'banker' && this.winner === 'B') || (id === 'tie' && this.winner === 'T'));
+    rr(x, y, w, h, 14); ctx.fillStyle = win ? 'rgba(255,230,120,.25)' : hov ? 'rgba(255,255,255,.12)' : 'rgba(0,0,0,.18)'; ctx.fill();
+    ctx.strokeStyle = col; ctx.lineWidth = 3; ctx.stroke();
+    T(label, x + w / 2, y + 22, 20, col, 'center', 'bold', SERIF); T(sub, x + w / 2, y + 44, 12, 'rgba(255,255,255,.65)', 'center', 'bold');
+    drawStack(x + w / 2, y + h - 30, this.bets[id]);
+    if (can) region(x, y, w, h, b => b === 2 ? this.remove(id) : this.place(id), true);
+  }
+  draw() {
+    roomBg(); halfTable('#7a1e2a'); drawShoe(1080, 118); drawDealerTray(640, 86);
+    arcText('BACCARAT', 640, 66, 300, 28, 'rgba(255,221,120,.85)');
+    arcText('BANKER PAYS 19 TO 20 · TIE PAYS 8 TO 1', 640, 66, 270, 14, 'rgba(255,255,255,.55)');
+    // road scoreboard
+    rr(130, 84, 290, 70, 8); ctx.fillStyle = 'rgba(0,0,0,.5)'; ctx.fill(); ctx.strokeStyle = 'rgba(201,161,59,.6)'; ctx.lineWidth = 1.5; ctx.stroke();
+    T('SCOREBOARD', 275, 96, 10, 'rgba(232,193,74,.7)');
+    this.road.slice(-26).forEach((r, i) => { const x = 146 + (i % 13) * 21, y = 116 + Math.floor(i / 13) * 22; ctx.beginPath(); circ(x, y, 8); ctx.fillStyle = r === 'P' ? '#2f6fd0' : r === 'B' ? '#c02a2a' : '#1d9a4a'; ctx.fill(); T(r, x, y + 1, 10, '#fff'); });
+    T('PLAYER', 445, 180, 22, '#6fb6ff', 'center', 'bold', SERIF); T('BANKER', 865, 180, 22, '#ff8b8b', 'center', 'bold', SERIF);
+    for (const c of this.cards()) c.draw();
+    const pv = this.pc.filter(c => c.f >= .5), bv = this.bc.filter(c => c.f >= .5);
+    if (pv.length) Blackjack.prototype.pill(445, 352, String(this.tot(pv)), '#fff');
+    if (bv.length) Blackjack.prototype.pill(865, 352, String(this.tot(bv)), '#fff');
+    this.box('player', 330, 480, 220, 170, 'PLAYER', 'PAYS 1 TO 1', '#6fb6ff');
+    this.box('tie', 565, 480, 150, 170, 'TIE', 'PAYS 8 TO 1', '#7dff8a');
+    this.box('banker', 730, 480, 220, 170, 'BANKER', 'PAYS 0.95 TO 1', '#ff8b8b');
+    this.drawBanner(412);
+    drawRack(this);
+    const by = 742, bh = 46;
+    if (this.phase === 'bet' || this.phase === 'done') {
+      button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.phase === 'bet' && this.onTable() > 0, color: '#8a6a4a' });
+      button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: !!this.last && !this.onTable(), color: '#8a6a4a' });
+      button(1050, by, 190, bh, this.phase === 'done' ? 'REBET & DEAL' : 'DEAL  ▸', () => this.deal(), { enabled: this.phase === 'bet' ? this.onTable() > 0 : !!this.last, color: '#2f9e55', text: '#fff', size: this.phase === 'done' ? 17 : 20 });
+    } else T('Dealing…', 900, 765, 18, 'rgba(255,233,166,.8)', 'center', 'italic', SERIF);
+  }
+}
+
+// =====================================================================
+//  ROULETTE (European)
+// =====================================================================
+const WHEEL = [0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7, 28, 12, 35, 3, 26];
+const REDS = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
+const numCol = n => n === 0 ? '#128a44' : REDS.has(n) ? '#b3121f' : '#161616';
+const WHEELC = document.createElement('canvas'); WHEELC.width = WHEELC.height = 360;
+(() => {
+  const c = WHEELC.getContext('2d'), cx = 180, cy = 180, st = TAU / 37;
+  c.fillStyle = '#3a1d0c'; c.beginPath(); c.arc(cx, cy, 178, 0, TAU); c.fill();
+  for (let i = 0; i < 37; i++) {
+    const n = WHEEL[i], a0 = i * st - st / 2, a1 = a0 + st;
+    c.fillStyle = numCol(n); c.beginPath(); c.arc(cx, cy, 177, a0, a1); c.arc(cx, cy, 118, a1, a0, true); c.closePath(); c.fill();
+    c.fillStyle = 'rgba(0,0,0,.28)'; c.beginPath(); c.arc(cx, cy, 150, a0, a1); c.arc(cx, cy, 118, a1, a0, true); c.closePath(); c.fill();
+    c.save(); c.translate(cx, cy); c.rotate(i * st + Math.PI / 2); c.fillStyle = '#fff'; c.font = 'bold 15px Arial'; c.textAlign = 'center'; c.textBaseline = 'middle'; c.fillText(String(n), 0, -164); c.restore();
+    c.strokeStyle = '#d8b560'; c.lineWidth = 1.6; c.beginPath(); c.moveTo(cx + Math.cos(a0) * 118, cy + Math.sin(a0) * 118); c.lineTo(cx + Math.cos(a0) * 177, cy + Math.sin(a0) * 177); c.stroke();
+  }
+  c.strokeStyle = '#d8b560'; c.lineWidth = 2; [118, 150, 177].forEach(r => { c.beginPath(); c.arc(cx, cy, r, 0, TAU); c.stroke(); });
+  const g = c.createRadialGradient(cx - 30, cy - 30, 10, cx, cy, 118); g.addColorStop(0, '#a0643a'); g.addColorStop(1, '#4a250f'); c.fillStyle = g; c.beginPath(); c.arc(cx, cy, 117, 0, TAU); c.fill();
+  for (let i = 0; i < 16; i++) { c.strokeStyle = 'rgba(0,0,0,.18)'; c.lineWidth = 1; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(i * TAU / 16) * 117, cy + Math.sin(i * TAU / 16) * 117); c.stroke(); }
+  c.strokeStyle = '#e8c14a'; c.lineWidth = 7; c.lineCap = 'round';
+  for (let i = 0; i < 4; i++) { const a = i * Math.PI / 2; c.beginPath(); c.moveTo(cx, cy); c.lineTo(cx + Math.cos(a) * 62, cy + Math.sin(a) * 62); c.stroke(); c.fillStyle = '#f5dc8a'; c.beginPath(); c.arc(cx + Math.cos(a) * 64, cy + Math.sin(a) * 64, 8, 0, TAU); c.fill(); }
+  const g2 = c.createRadialGradient(cx - 6, cy - 6, 2, cx, cy, 24); g2.addColorStop(0, '#fff6c8'); g2.addColorStop(1, '#b8861f'); c.fillStyle = g2; c.beginPath(); c.arc(cx, cy, 22, 0, TAU); c.fill();
+})();
+function drawWheel(cx, cy, scale, ang, ballA, ballR) {
+  ctx.save(); ctx.translate(cx, cy); ctx.scale(scale, scale);
+  ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 30; ctx.beginPath(); circ(0, 0, 232); const g = ctx.createRadialGradient(0, 0, 180, 0, 0, 232); g.addColorStop(0, '#5a2e12'); g.addColorStop(.7, '#3a1c0a'); g.addColorStop(1, '#1c0d04'); ctx.fillStyle = g; ctx.fill(); ctx.shadowBlur = 0;
+  ctx.beginPath(); circ(0, 0, 216); const g2 = ctx.createRadialGradient(0, 0, 178, 0, 0, 216); g2.addColorStop(0, '#2a1508'); g2.addColorStop(.5, '#c9a46a'); g2.addColorStop(1, '#6a4420'); ctx.fillStyle = g2; ctx.fill();
+  for (let i = 0; i < 8; i++) { const a = i * TAU / 8 + .2; ctx.save(); ctx.rotate(a); ctx.fillStyle = '#e8c14a'; ctx.beginPath(); ctx.moveTo(206, 0); ctx.lineTo(200, -6); ctx.lineTo(194, 0); ctx.lineTo(200, 6); ctx.fill(); ctx.restore(); }
+  ctx.save(); ctx.rotate(ang); ctx.drawImage(WHEELC, -180, -180); ctx.restore();
+  if (ballA != null) {
+    const bx = Math.cos(ballA) * ballR, by = Math.sin(ballA) * ballR;
+    ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 5; ctx.shadowOffsetY = 2;
+    const bg = ctx.createRadialGradient(bx - 2, by - 2, 1, bx, by, 7); bg.addColorStop(0, '#fff'); bg.addColorStop(1, '#b8b8b8'); ctx.fillStyle = bg; ctx.beginPath(); circ(bx, by, 7); ctx.fill();
+  }
+  ctx.restore();
+}
+class Roulette extends Game {
+  constructor() {
+    super(); this.wa = 0; this.rel = null; this.ballA = -Math.PI / 2; this.ballR = 197; this.hist = []; this.result = null; this.cells = []; this.byId = {};
+    const add = c => { this.cells.push(c); this.byId[c.id] = c; };
+    add({ id: 'n0', x: 530, y: 232, w: 50, h: 180, label: '0', nums: [0], mult: 35, fill: numCol(0) });
+    for (let c = 0; c < 12; c++) for (let r = 0; r < 3; r++) { const n = 3 * c + (3 - r); add({ id: 'n' + n, x: 580 + c * 48, y: 232 + r * 60, w: 48, h: 60, label: String(n), nums: [n], mult: 35, fill: numCol(n) }); }
+    for (let r = 0; r < 3; r++) { const m = (3 - r) % 3, nums = []; for (let n = 1; n <= 36; n++) if (n % 3 === m) nums.push(n); add({ id: 'col' + (3 - r), x: 1156, y: 232 + r * 60, w: 54, h: 60, label: '2 to 1', nums, mult: 2 }); }
+    ['1st 12', '2nd 12', '3rd 12'].forEach((l, d) => { const nums = []; for (let n = d * 12 + 1; n <= d * 12 + 12; n++) nums.push(n); add({ id: 'doz' + (d + 1), x: 580 + d * 192, y: 412, w: 192, h: 50, label: l, nums, mult: 2 }); });
+    const r = (a, b) => { const o = []; for (let n = a; n <= b; n++) o.push(n); return o; }, all = r(1, 36);
+    [['low', '1 – 18', r(1, 18)], ['even', 'EVEN', all.filter(n => n % 2 === 0)], ['red', 'RED', all.filter(n => REDS.has(n))], ['black', 'BLACK', all.filter(n => !REDS.has(n))], ['odd', 'ODD', all.filter(n => n % 2)], ['high', '19 – 36', r(19, 36)]]
+      .forEach(([id, l, nums], i) => add({ id, x: 580 + i * 96, y: 462, w: 96, h: 50, label: l, nums, mult: 1 }));
+  }
+  onTable() { return this.phase === 'done' ? 0 : super.onTable(); }
+  spin() {
+    if (this.phase === 'done') { if (!this.rebet()) return; }
+    if (this.phase !== 'bet') return;
+    if (!this.onTable()) { toast('Place at least one bet on the layout'); return; }
+    this.last = { ...this.bets }; this.phase = 'spin'; this.result = rint(37); this.t = 0; this.T = 7.5;
+    this.target = this.result * TAU / 37; this.relStart = this.ballA - this.wa; while (this.relStart < this.target + TAU * 9) this.relStart += TAU;
+    this.banner = null; this.bounced = 0;
+  }
+  update(dt) {
+    let speed = .3;
+    if (this.phase === 'spin') {
+      this.t += dt; const u = Math.min(1, this.t / this.T); speed += 2.4 * (1 - u);
+      const rel = this.target + (this.relStart - this.target) * (1 - easeOutQuart(u));
+      this.wa += speed * dt; this.ballA = this.wa + rel;
+      if (u < .7) this.ballR = 197; else { const v = (u - .7) / .3, b = easeOutBounce(Math.min(1, v * 1.2)); this.ballR = 197 - (197 - 134) * b; if (v > .15 * (this.bounced + 1) && this.bounced < 5) { this.bounced++; Snd.tick(); } }
+      if (u >= 1) this.settle();
+    } else { this.wa += speed * dt; if (this.result !== null) this.ballA = this.wa + this.result * TAU / 37; }
+  }
+  settle() {
+    const n = WHEEL[this.result]; this.hist.unshift(n); if (this.hist.length > 16) this.hist.pop();
+    let ret = 0, staked = 0; const keep = {};
+    for (const k in this.bets) { const c = this.byId[k], v = this.bets[k]; staked += v; if (c.nums.includes(n)) { const r = v * (c.mult + 1); ret += r; keep[k] = v; popNet(c.x + c.w / 2, c.y, r - v); } }
+    S.chips += ret; this.bets = keep; this.phase = 'done'; this.win = n; const net = ret - staked;
+    const cname = n === 0 ? 'GREEN' : REDS.has(n) ? 'RED' : 'BLACK';
+    this.say(n + ' ' + cname, n === 0 ? '#7dff8a' : REDS.has(n) ? '#ff6b6b' : '#e6e6e6', net > 0 ? 'You win ' + fmt(net) : net < 0 ? 'You lose ' + fmt(-net) : 'You break even');
+    net > 0 ? Snd.win() : Snd.lose();
+  }
+  hot(k) { if (k === ' ' || k === 'enter') this.spin(); }
+  draw() {
+    roomBg(); rectTable('#0e6035', 36, 70, 1210, 640, 70);
+    drawWheel(280, 400, 1, this.wa, this.ballA, this.ballR);
+    // history
+    T('LAST NUMBERS', 530, 120, 12, 'rgba(232,193,74,.8)', 'left');
+    this.hist.slice(0, 15).forEach((n, i) => { const x = 544 + i * 44, y = 158; rr(x - 17, y - 17, 34, 34, 6); ctx.fillStyle = numCol(n); ctx.fill(); if (i === 0) { ctx.strokeStyle = '#ffd76a'; ctx.lineWidth = 2; ctx.stroke(); } T(String(n), x, y + 1, 15, '#fff'); });
+    if (!this.hist.length) T('Place your bets!', 530, 158, 18, 'rgba(255,255,255,.5)', 'left', 'italic', SERIF);
+    // board
+    const can = this.phase === 'bet' || (this.phase === 'done');
+    let hovCell = null;
+    for (const c of this.cells) { if (can && over(c.x, c.y, c.w, c.h)) hovCell = c; }
+    const lit = new Set(hovCell ? hovCell.nums : []);
+    for (const c of this.cells) {
+      ctx.fillStyle = c.fill || 'rgba(0,0,0,.1)'; ctx.fillRect(c.x, c.y, c.w, c.h);
+      if (c.nums.length === 1 && lit.has(c.nums[0])) { ctx.fillStyle = 'rgba(255,255,220,.3)'; ctx.fillRect(c.x, c.y, c.w, c.h); }
+      if (c === hovCell && c.nums.length > 1) { ctx.fillStyle = 'rgba(255,255,220,.18)'; ctx.fillRect(c.x, c.y, c.w, c.h); }
+      ctx.strokeStyle = 'rgba(255,255,255,.75)'; ctx.lineWidth = 1.5; ctx.strokeRect(c.x, c.y, c.w, c.h);
+      if (c.id === 'red' || c.id === 'black') { ctx.fillStyle = c.id === 'red' ? '#c01624' : '#111'; ctx.beginPath(); ctx.moveTo(c.x + c.w / 2, c.y + 8); ctx.lineTo(c.x + c.w / 2 + 30, c.y + c.h / 2); ctx.lineTo(c.x + c.w / 2, c.y + c.h - 8); ctx.lineTo(c.x + c.w / 2 - 30, c.y + c.h / 2); ctx.closePath(); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1; ctx.stroke(); }
+      else if (c.nums.length === 1) { ctx.save(); ctx.translate(c.x + c.w / 2, c.y + c.h / 2); if (c.id !== 'n0') ctx.rotate(-Math.PI / 2); T(c.label, 0, 1, 19, '#fff', 'center', 'bold', SERIF); ctx.restore(); }
+      else T(c.label, c.x + c.w / 2, c.y + c.h / 2 + 1, c.id.startsWith('col') ? 13 : 16, '#fff', 'center', 'bold', SERIF);
+      if (this.phase === 'done' && c.nums.length === 1 && c.nums[0] === this.win) {
+        const x = c.x + c.w / 2, y = c.y + c.h / 2 - 6, bob = Math.sin(S.time * 4) * 2;
+        ctx.save(); ctx.shadowColor = '#fff'; ctx.shadowBlur = 16; rr(x - 10, y - 18 + bob, 20, 30, 6); const dg = ctx.createLinearGradient(x - 10, 0, x + 10, 0); dg.addColorStop(0, '#fff'); dg.addColorStop(1, '#c8d8ff'); ctx.fillStyle = dg; ctx.fill(); ctx.restore();
+      }
+      if (can) region(c.x, c.y, c.w, c.h, b => b === 2 ? this.remove(c.id) : this.place(c.id), true);
+    }
+    for (const c of this.cells) if (this.bets[c.id]) drawStack(c.x + c.w / 2, c.y + c.h / 2 + 2, this.bets[c.id], 16, false);
+    if (hovCell && this.bets[hovCell.id]) { ctx.font = 'bold 14px ' + SANS; const t = fmt(this.bets[hovCell.id]), w = ctx.measureText(t).width + 14; rr(M.x + 10, M.y - 30, w, 22, 8); ctx.fillStyle = 'rgba(0,0,0,.85)'; ctx.fill(); T(t, M.x + 10 + w / 2, M.y - 19, 14, '#ffe9a6'); }
+    const tb = this.phase === 'done' ? 0 : this.onTable();
+    T('TOTAL BET  ' + fmt(tb), 1206, 540, 16, '#ffe9a6', 'right', 'bold');
+    T('Straight 35:1 · Columns & Dozens 2:1 · Even-money 1:1', 530, 540, 13, 'rgba(255,255,255,.55)', 'left', 'normal');
+    this.drawBanner(636);
+    drawRack(this);
+    const by = 742, bh = 46;
+    if (this.phase === 'spin') T('No more bets!', 900, 765, 20, 'rgba(255,233,166,.85)', 'center', 'italic', SERIF);
+    else {
+      button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.phase === 'bet' && this.onTable() > 0, color: '#8a6a4a' });
+      button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: !!this.last && (this.phase === 'done' || !this.onTable()), color: '#8a6a4a' });
+      button(1050, by, 190, bh, this.phase === 'done' ? 'REBET & SPIN' : 'SPIN  ▸', () => this.spin(), { enabled: this.phase === 'bet' ? this.onTable() > 0 : !!this.last, color: '#2f9e55', text: '#fff', size: this.phase === 'done' ? 17 : 20 });
+    }
+  }
+}
+
+// =====================================================================
+//  CRAPS
+// =====================================================================
+const CRAPS_SPOTS = {
+  pass: { x: 180, y: 455, w: 820, h: 75, sx: 590, sy: 488 },
+  dp: { x: 330, y: 395, w: 600, h: 52, sx: 780, sy: 418 },
+  field: { x: 330, y: 285, w: 600, h: 100, sx: 860, sy: 332 },
+  big6: { x: 180, y: 285, w: 140, h: 77, sx: 280, sy: 322 },
+  big8: { x: 180, y: 368, w: 140, h: 77, sx: 280, sy: 405 },
+  any7: { x: 950, y: 100, w: 260, h: 130, sx: 1150, sy: 175 },
+  craps: { x: 950, y: 240, w: 260, h: 130, sx: 1150, sy: 315 }
+};
+class Craps extends Game {
+  constructor() { super(); this.point = null; this.hist = []; this.dice = [{ x: 880, y: 620, a: .2, f: 5, vx: 0, vy: 0, va: 0 }, { x: 950, y: 640, a: -.3, f: 2, vx: 0, vy: 0, va: 0 }]; }
+  canPlace(s) { return this.phase === 'bet' && (!(s === 'pass' || s === 'dp') || this.point === null); }
+  canRemove(s) { return this.phase === 'bet' && !((s === 'pass' || s === 'dp') && this.point !== null); }
+  canLeave() { return this.phase === 'bet' && this.point === null && !this.busy(); }
+  leave() { this.clear(); }
+  rebet() {
+    if (!this.last) { toast('No previous bets'); return; }
+    let tot = 0; const add = {}; for (const k in this.last) if (!this.bets[k] && this.canPlace(k)) { add[k] = this.last[k]; tot += this.last[k]; }
+    if (!tot) { toast('Those bets are already on the table'); return; }
+    if (tot > S.chips) { toast('Not enough chips to repeat those bets'); return; }
+    for (const k in add) { S.chips -= add[k]; this.bets[k] = add[k]; } Snd.chip();
+  }
+  roll() {
+    if (this.phase !== 'bet') return;
+    if (!this.onTable()) { toast(this.point ? 'Place a bet first' : 'Place a bet first. The PASS LINE is the classic.'); return; }
+    this.last = { ...this.bets }; this.phase = 'roll'; this.banner = null;
+    this.res = [1 + rint(6), 1 + rint(6)]; this.rt = 0;
+    this.dice.forEach((d, i) => { d.x = 1170 + i * 20; d.y = 590 + rnd() * 70; d.vx = -(620 + rnd() * 280); d.vy = (rnd() - .5) * 420; d.va = (rnd() - .5) * 26; d.ft = 0; d.final = this.res[i]; });
+    Snd.dice(); this.after(1800, () => this.resolve());
+  }
+  update(dt) {
+    if (this.phase !== 'roll') return; this.rt += dt;
+    for (const d of this.dice) {
+      d.x += d.vx * dt; d.y += d.vy * dt; d.a += d.va * dt;
+      if (d.y < 572) { d.y = 572; d.vy = Math.abs(d.vy) * .7; } if (d.y > 682) { d.y = 682; d.vy = -Math.abs(d.vy) * .7; }
+      if (d.x < 100) { d.x = 100; d.vx = Math.abs(d.vx) * .5; }
+      const f = Math.pow(.33, dt); d.vx *= f; d.vy *= f; d.va *= Math.pow(.25, dt);
+      const sp = Math.hypot(d.vx, d.vy); d.ft -= dt;
+      if (sp > 110) { if (d.ft <= 0) { d.f = 1 + rint(6); d.ft = .07; } } else d.f = d.final;
+    }
+    const [a, b] = this.dice; const dx = b.x - a.x, dy = b.y - a.y, dist = Math.hypot(dx, dy);
+    if (dist < 50 && dist > 0) { const push = (50 - dist) / 2, nx = dx / dist, ny = dy / dist; a.x -= nx * push; a.y -= ny * push; b.x += nx * push; b.y += ny * push; }
+  }
+  resolve() {
+    this.dice.forEach(d => { d.f = d.final; d.vx = d.vy = d.va = 0; });
+    const [a, b] = this.res, s = a + b; this.hist.unshift(s); if (this.hist.length > 14) this.hist.pop();
+    let net = 0;
+    const at = k => CRAPS_SPOTS[k];
+    const win = (k, m) => { const v = this.bets[k]; if (!v) return; S.chips += v * m; net += v * m; popNet(at(k).sx, at(k).sy - 30, v * m); };
+    const lose = k => { const v = this.bets[k]; if (!v) return; delete this.bets[k]; net -= v; popNet(at(k).sx, at(k).sy - 30, -v); };
+    const push = k => { if (this.bets[k]) popNet(at(k).sx, at(k).sy - 30, 0); };
+    if ([2, 3, 4, 9, 10, 11, 12].includes(s)) win('field', s === 2 ? 2 : s === 12 ? 3 : 1); else lose('field');
+    if (s === 7) win('any7', 4); else lose('any7');
+    if (s === 2 || s === 3 || s === 12) win('craps', 7); else lose('craps');
+    if (s === 6) win('big6', 1); else if (s === 7) lose('big6');
+    if (s === 8) win('big8', 1); else if (s === 7) lose('big8');
+    let msg, col = '#ffd86b';
+    if (this.point === null) {
+      if (s === 7 || s === 11) { win('pass', 1); lose('dp'); msg = s + ' — WINNER!'; col = '#7dff8a'; }
+      else if (s === 2 || s === 3) { lose('pass'); win('dp', 1); msg = 'CRAPS ' + s; col = '#ff7b7b'; }
+      else if (s === 12) { lose('pass'); push('dp'); msg = 'CRAPS 12'; col = '#ff7b7b'; }
+      else { this.point = s; msg = 'THE POINT IS ' + s; }
+    } else {
+      if (s === this.point) { win('pass', 1); lose('dp'); msg = 'POINT ' + s + ' MADE!'; col = '#7dff8a'; this.point = null; }
+      else if (s === 7) { lose('pass'); win('dp', 1); msg = 'SEVEN OUT'; col = '#ff7b7b'; this.point = null; }
+      else msg = s + ' — ROLL AGAIN';
+    }
+    this.say(msg, col, a + ' + ' + b + (net ? (net > 0 ? ' · you won ' + fmt(net) : ' · you lost ' + fmt(-net)) : ''), 3.2);
+    net > 0 ? Snd.win() : net < 0 ? Snd.lose() : 0;
+    this.phase = 'bet';
+  }
+  hot(k) { if (k === ' ' || k === 'enter' || k === 'r') this.roll(); }
+  spot(id, draw) {
+    const s = CRAPS_SPOTS[id], can = this.canPlace(id), hov = over(s.x, s.y, s.w, s.h) && this.phase === 'bet';
+    rr(s.x, s.y, s.w, s.h, 10); ctx.fillStyle = hov && can ? 'rgba(255,255,255,.14)' : 'rgba(0,0,0,.08)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2.5; ctx.stroke();
+    draw(s);
+    if (!can && hov && (id === 'pass' || id === 'dp')) T(this.bets[id] ? 'Locked until the point is decided' : 'Only before a point is set', s.x + s.w / 2, s.y + s.h - 10, 12, '#ffb86b');
+    region(s.x, s.y, s.w, s.h, b => b === 2 ? this.remove(id) : (can ? this.place(id) : toast(id === 'pass' || id === 'dp' ? 'Pass / Don\'t Pass bets go down before the point is set' : 'Wait for the dice')), true);
+  }
+  draw() {
+    roomBg(); rectTable('#0f5f45', 36, 70, 1210, 646, 60);
+    // point boxes
+    ['4', '5', 'SIX', '8', 'NINE', '10'].forEach((l, i) => {
+      const x = 330 + i * 100, n = [4, 5, 6, 8, 9, 10][i]; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2.5; ctx.strokeRect(x, 100, 100, 85);
+      T(l, x + 50, 142, l.length > 2 ? 28 : 38, '#fff', 'center', 'bold', SERIF);
+      if (this.point === n) { const bob = Math.sin(S.time * 3) * 2; ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 8; ctx.beginPath(); circ(x + 50, 108 + bob, 22); ctx.fillStyle = '#fafafa'; ctx.fill(); ctx.restore(); ctx.beginPath(); circ(x + 50, 108 + bob, 22); ctx.strokeStyle = '#111'; ctx.lineWidth = 2; ctx.stroke(); T('ON', x + 50, 109 + bob, 15, '#111'); }
+    });
+    if (this.point === null) { ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 8; ctx.beginPath(); circ(270, 142, 24); ctx.fillStyle = '#111'; ctx.fill(); ctx.restore(); ctx.beginPath(); circ(270, 142, 24); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); T('OFF', 270, 143, 13, '#fff'); }
+    T('★ ROYAL CHIP CRAPS ★', 630, 238, 34, 'rgba(255,90,90,.9)', 'center', 'bold', SERIF);
+    T(this.point === null ? 'COME-OUT ROLL' : 'POINT IS ' + this.point, 630, 270, 14, 'rgba(255,255,255,.7)', 'center', 'bold');
+    this.spot('field', s => {
+      T('FIELD', s.x + 300, s.y + 26, 26, '#ffd23a', 'center', 'bold', SERIF);
+      const nums = ['2', '3', '4', '9', '10', '11', '12']; nums.forEach((n, i) => { const x = s.x + 60 + i * 80; if (n === '2' || n === '12') { ctx.beginPath(); circ(x, s.y + 66, 18); ctx.strokeStyle = '#ffd23a'; ctx.lineWidth = 2; ctx.stroke(); } T(n, x, s.y + 67, 22, '#fff', 'center', 'bold', SERIF); });
+      T('2 PAYS DOUBLE', s.x + 60, s.y + 92, 9, '#ffd23a'); T('12 PAYS TRIPLE', s.x + 540, s.y + 92, 9, '#ffd23a');
+      drawStack(s.sx, s.sy, this.bets.field);
+    });
+    this.spot('dp', s => { T("DON'T PASS BAR", s.x + 200, s.y + 27, 22, '#fff', 'center', 'bold', SERIF); drawDie(s.x + 400, s.y + 26, 26, 6, 0); drawDie(s.x + 432, s.y + 26, 26, 6, 0); T('PUSH', s.x + 480, s.y + 27, 12, '#fff'); drawStack(s.sx, s.sy, this.bets.dp); });
+    this.spot('pass', s => { T('PASS LINE', s.x + 300, s.y + 38, 36, '#fff', 'center', 'bold', SERIF); T('WINS ON 7·11 COME-OUT', s.x + 650, s.y + 38, 12, 'rgba(255,255,255,.8)'); drawStack(s.sx, s.sy, this.bets.pass); });
+    this.spot('big6', s => { T('BIG', s.x + 30, s.y + 38, 14, '#fff'); T('6', s.x + 70, s.y + 38, 44, '#ff4b4b', 'center', 'bold', SERIF); drawStack(s.sx, s.sy, this.bets.big6, 18, false); });
+    this.spot('big8', s => { T('BIG', s.x + 30, s.y + 38, 14, '#fff'); T('8', s.x + 70, s.y + 38, 44, '#ff4b4b', 'center', 'bold', SERIF); drawStack(s.sx, s.sy, this.bets.big8, 18, false); });
+    this.spot('any7', s => { T('SEVEN', s.x + 90, s.y + 50, 32, '#ff4b4b', 'center', 'bold', SERIF); T('ANY 7 · 4 TO 1', s.x + 90, s.y + 90, 14, '#fff'); drawStack(s.sx, s.sy, this.bets.any7, 20); });
+    this.spot('craps', s => { T('ANY CRAPS', s.x + 90, s.y + 42, 24, '#ff4b4b', 'center', 'bold', SERIF); T('2 · 3 · 12', s.x + 90, s.y + 72, 16, '#fff', 'center', 'bold'); T('7 TO 1', s.x + 90, s.y + 98, 14, '#fff'); drawStack(s.sx, s.sy, this.bets.craps, 20); });
+    // roll history
+    rr(1020, 385, 190, 150, 10); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill(); ctx.strokeStyle = 'rgba(232,193,74,.6)'; ctx.lineWidth = 1.5; ctx.stroke();
+    T('LAST ROLLS', 1115, 402, 11, 'rgba(232,193,74,.85)');
+    this.hist.slice(0, 12).forEach((s, i) => { const x = 1045 + (i % 4) * 46, y = 432 + Math.floor(i / 4) * 34; T(String(s), x, y, i === 0 ? 22 : 18, s === 7 ? '#ff6b6b' : i === 0 ? '#ffe9a6' : '#fff', 'center', 'bold', SERIF); });
+    if (!this.hist.length) T('No rolls yet', 1115, 460, 14, 'rgba(255,255,255,.5)', 'center', 'italic', SERIF);
+    ctx.strokeStyle = 'rgba(255,255,255,.12)'; ctx.setLineDash([8, 8]); ctx.strokeRect(80, 556, 1122, 140); ctx.setLineDash([]);
+    T('DICE MUST HIT THE BACK WALL', 640, 684, 11, 'rgba(255,255,255,.25)');
+    for (const d of this.dice) drawDie(d.x, d.y, 46, d.f, d.a);
+    this.drawBanner(608);
+    drawRack(this);
+    const by = 742, bh = 46;
+    button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.phase === 'bet' && Object.keys(this.bets).some(k => this.canRemove(k)), color: '#8a6a4a' });
+    button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: this.phase === 'bet' && !!this.last, color: '#8a6a4a' });
+    T('ON TABLE  ' + fmt(this.onTable()), 940, 765, 15, '#ffe9a6', 'center', 'bold');
+    button(1050, by, 190, bh, 'ROLL DICE  ▸', () => this.roll(), { enabled: this.phase === 'bet' && this.onTable() > 0, color: '#2f9e55', text: '#fff', size: 19 });
+  }
+}
+
+// =====================================================================
+//  CRASH
+// =====================================================================
+const AUTO = [0, 1.2, 1.5, 2, 3, 5, 10, 25, 50, 100];
+const CRASH_K = .12;
+class Crash extends Game {
+  constructor() { super(); this.single = 'bet'; this.ai = 0; this.hist = []; this.reset(); this.stars = Array.from({ length: 90 }, () => ({ x: rnd() * 880, y: rnd() * 600, s: rnd() * 1.8 + .4 })); }
+  reset() { this.t = 0; this.m = 1; this.cashed = 0; this.crashed = false; this.bet = 0; }
+  onTable() { if (this.phase === 'bet') return super.onTable(); if (this.phase === 'fly' && !this.cashed) return this.bet; return 0; }
+  canLeave() { return (this.phase === 'bet' || this.phase === 'done') && !this.busy(); }
+  launch() {
+    if (this.phase === 'done') { if (!this.rebet()) return; }
+    if (this.phase !== 'bet') return;
+    const b = this.bets.bet || 0; if (!b) { toast('Place a bet first'); return; }
+    this.last = { bet: b }; this.reset(); this.bet = b; this.banner = null;
+    const u = rnd(); this.cp = Math.max(1, Math.min(1000, Math.floor(97 / (1 - u)) / 100));
+    this.phase = 'fly'; Snd.launch();
+  }
+  cash(at) {
+    if (this.phase !== 'fly' || this.cashed) return; const m = at || this.m; this.cashed = m;
+    const ret = Math.floor(this.bet * m); S.chips += ret; popNet(1110, 250, ret - this.bet); Snd.win();
+    const p = this.pt(this.t, m); burst(p.x, p.y, 30, ['#7dff8a', '#ffe9a6', '#fff'], 180, 0, 3);
+  }
+  update(dt) {
+    if (this.phase !== 'fly') return; this.t += dt; this.m = Math.exp(CRASH_K * this.t);
+    const auto = AUTO[this.ai];
+    if (auto && !this.cashed && this.m >= auto && auto < this.cp) this.cash(auto);
+    if (this.m >= this.cp) { this.m = this.cp; this.t = Math.log(this.cp) / CRASH_K; this.boom(); }
+  }
+  boom() {
+    this.phase = 'done'; this.crashed = true; this.hist.unshift(this.cp); if (this.hist.length > 12) this.hist.pop();
+    const p = this.pt(this.t, this.m); burst(p.x, p.y, 80, ['#ff5a2a', '#ffb02a', '#ffe36a', '#fff', '#888'], 260, 60, 4); Snd.boom();
+    if (this.cashed) this.say('CRASHED @ ' + this.cp.toFixed(2) + '×', '#ff8b5a', 'You cashed out at ' + this.cashed.toFixed(2) + '× for ' + fmt(Math.floor(this.bet * this.cashed)));
+    else { this.say('CRASHED @ ' + this.cp.toFixed(2) + '×', '#ff5a5a', 'You lost ' + fmt(this.bet)); popNet(1110, 250, -this.bet); }
+  }
+  scale() { return { xmax: Math.max(8, this.t * 1.2), ymax: Math.max(2, this.m * 1.25) }; }
+  pt(t, m) { const s = this.scale(); return { x: 130 + t / s.xmax * 780, y: 640 - (m - 1) / (s.ymax - 1) * 510 }; }
+  hot(k) { if (k === ' ' || k === 'enter') { if (this.phase === 'fly') this.cash(); else this.launch(); } }
+  draw() {
+    ctx.drawImage(BOKEH, 0, 0);
+    // cabinet bezel
+    rr(50, 68, 920, 644, 26); const bg = ctx.createLinearGradient(0, 68, 0, 712); bg.addColorStop(0, '#3a3f4a'); bg.addColorStop(.5, '#1b1e25'); bg.addColorStop(1, '#2a2e36'); ctx.fillStyle = bg; ctx.fill(); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 3; ctx.stroke();
+    ctx.save(); rr(70, 86, 880, 608, 14); ctx.clip();
+    const sg = ctx.createLinearGradient(0, 86, 0, 694); sg.addColorStop(0, '#0a1030'); sg.addColorStop(1, '#1a0830'); ctx.fillStyle = sg; ctx.fillRect(70, 86, 880, 608);
+    const flying = this.phase === 'fly'; for (const s of this.stars) { if (flying) { s.x -= s.s * 60 * (1 / 60) * (1 + this.m * .3); if (s.x < 0) { s.x = 880; s.y = rnd() * 600; } } ctx.fillStyle = `rgba(255,255,255,${.3 + s.s * .3})`; ctx.fillRect(70 + s.x, 86 + s.y, s.s, s.s); }
+    const sc = this.scale();
+    // grid
+    ctx.strokeStyle = 'rgba(120,160,255,.14)'; ctx.lineWidth = 1; ctx.font = '12px ' + SANS;
+    const steps = [.25, .5, 1, 2, 5, 10, 20, 50, 100, 200, 500]; let st = steps.find(v => (sc.ymax - 1) / v <= 6) || 500;
+    for (let v = 1; v <= sc.ymax + .001; v += st) { const y = 640 - (v - 1) / (sc.ymax - 1) * 510; ctx.beginPath(); ctx.moveTo(130, y); ctx.lineTo(910, y); ctx.stroke(); T(v.toFixed(v < 10 && st < 1 ? 2 : v < 10 ? 1 : 0) + '×', 120, y, 12, 'rgba(180,200,255,.7)', 'right', 'normal'); }
+    const xs = [1, 2, 5, 10, 20, 30, 60].find(v => sc.xmax / v <= 8) || 60;
+    for (let v = 0; v <= sc.xmax; v += xs) { const x = 130 + v / sc.xmax * 780; ctx.beginPath(); ctx.moveTo(x, 130); ctx.lineTo(x, 640); ctx.stroke(); T(v + 's', x, 658, 12, 'rgba(180,200,255,.7)', 'center', 'normal'); }
+    // curve
+    if (this.phase === 'fly' || this.phase === 'done' && this.t > 0) {
+      const n = 80, col = this.crashed ? '#ff5a5a' : this.cashed ? '#7dff8a' : '#ffd23a';
+      ctx.beginPath(); ctx.moveTo(130, 640);
+      for (let i = 1; i <= n; i++) { const t = this.t * i / n, p = this.pt(t, Math.exp(CRASH_K * t)); ctx.lineTo(p.x, p.y); }
+      const tip = this.pt(this.t, this.m);
+      ctx.save(); ctx.lineTo(tip.x, 640); ctx.closePath(); const fg = ctx.createLinearGradient(0, tip.y, 0, 640); fg.addColorStop(0, col + '55'); fg.addColorStop(1, col + '00'); ctx.fillStyle = fg; ctx.fill(); ctx.restore();
+      ctx.beginPath(); ctx.moveTo(130, 640); for (let i = 1; i <= n; i++) { const t = this.t * i / n, p = this.pt(t, Math.exp(CRASH_K * t)); ctx.lineTo(p.x, p.y); }
+      ctx.strokeStyle = col; ctx.lineWidth = 5; ctx.shadowColor = col; ctx.shadowBlur = 14; ctx.stroke(); ctx.shadowBlur = 0;
+      if (this.cashed) { const cp = this.pt(Math.log(this.cashed) / CRASH_K, this.cashed); ctx.beginPath(); circ(cp.x, cp.y, 7); ctx.fillStyle = '#7dff8a'; ctx.fill(); T('CASHED ' + this.cashed.toFixed(2) + '×', cp.x, cp.y - 22, 14, '#7dff8a'); }
+      if (!this.crashed) {
+        const pr = this.pt(Math.max(0, this.t - .3), Math.exp(CRASH_K * Math.max(0, this.t - .3)));
+        const ang = Math.atan2(tip.y - pr.y, tip.x - pr.x) || -.3; drawRocket(tip.x, tip.y, ang);
+      }
+    } else drawRocket(150, 620, -.5);
+    // multiplier
+    const mc = this.crashed ? '#ff5a5a' : this.cashed ? '#7dff8a' : '#fff';
+    ctx.shadowColor = mc; ctx.shadowBlur = 20; T(this.m.toFixed(2) + '×', 510, 230, 84, mc, 'center', 'bold', SANS); ctx.shadowBlur = 0;
+    if (this.phase === 'bet') T('Place a bet and press LAUNCH', 510, 300, 20, 'rgba(255,255,255,.7)', 'center', 'normal');
+    ctx.restore();
+    T('ROCKET CRASH', 510, 78, 12, 'rgba(232,193,74,.8)');
+    drawParts();
+    this.drawBanner(360);
+    // side panel
+    rr(990, 68, 250, 644, 20); ctx.fillStyle = 'rgba(20,10,20,.85)'; ctx.fill(); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+    T('YOUR BET', 1115, 96, 14, '#e8c14a', 'center', 'bold');
+    if (this.phase === 'fly' || (this.phase === 'done' && this.bet)) { ctx.beginPath(); circ(1115, 180, 52); ctx.strokeStyle = 'rgba(232,193,74,.8)'; ctx.lineWidth = 3; ctx.stroke(); if (this.phase === 'fly' && !this.cashed) drawStack(1115, 180, this.bet); else T(this.cashed ? 'CASHED' : 'LOST', 1115, 180, 18, this.cashed ? '#7dff8a' : '#ff6b6b'); }
+    else this.betSpot('bet', 1115, 180, 52, 'BET', this.bets.bet);
+    if (this.phase === 'fly' && !this.cashed) T('Potential: ' + fmt(Math.floor(this.bet * this.m)), 1115, 262, 16, '#7dff8a');
+    T('AUTO CASH-OUT', 1115, 300, 13, '#e8c14a');
+    rr(1050, 318, 130, 44, 8); ctx.fillStyle = '#05070f'; ctx.fill(); ctx.strokeStyle = '#555'; ctx.stroke();
+    T(AUTO[this.ai] ? AUTO[this.ai].toFixed(2) + '×' : 'OFF', 1115, 341, 22, AUTO[this.ai] ? '#7dff8a' : '#888', 'center', 'bold', 'Courier New, monospace');
+    const aen = this.phase !== 'fly';
+    button(1004, 318, 40, 44, '–', () => { this.ai = Math.max(0, this.ai - 1); }, { enabled: aen, size: 24 });
+    button(1186, 318, 40, 44, '+', () => { this.ai = Math.min(AUTO.length - 1, this.ai + 1); }, { enabled: aen, size: 24 });
+    if (this.phase === 'fly' && !this.cashed) button(1004, 386, 222, 84, 'CASH OUT', () => this.cash(), { color: '#e0a21a', size: 26 });
+    else if (this.phase === 'fly') button(1004, 386, 222, 84, 'CASHED ✓', () => { }, { enabled: false, size: 24 });
+    else button(1004, 386, 222, 84, this.phase === 'done' ? 'REBET & LAUNCH' : 'LAUNCH  ▸', () => this.launch(), { color: '#2f9e55', text: '#fff', size: this.phase === 'done' ? 19 : 24, enabled: this.phase === 'bet' ? this.onTable() > 0 : !!this.last && S.chips >= this.last.bet });
+    T('Space = launch / cash out', 1115, 488, 12, 'rgba(255,255,255,.5)', 'center', 'normal');
+    T('RECENT CRASHES', 1115, 520, 13, '#e8c14a');
+    this.hist.slice(0, 12).forEach((v, i) => { const x = 1034 + (i % 3) * 81, y = 552 + Math.floor(i / 3) * 36; rr(x - 36, y - 13, 72, 26, 13); ctx.fillStyle = v >= 2 ? 'rgba(40,160,80,.35)' : 'rgba(200,50,50,.35)'; ctx.fill(); T(v.toFixed(2) + '×', x, y + 1, 13, v >= 2 ? '#7dff8a' : '#ff8b8b'); });
+    if (!this.hist.length) T('None yet', 1115, 560, 14, 'rgba(255,255,255,.5)', 'center', 'italic', SERIF);
+    drawRack(this);
+    const by = 742, bh = 46;
+    if (this.phase !== 'fly') {
+      button(560, by, 120, bh, 'CLEAR', () => this.clear(), { enabled: this.phase === 'bet' && this.onTable() > 0, color: '#8a6a4a' });
+      button(692, by, 120, bh, 'REBET', () => this.rebet(), { enabled: !!this.last && (this.phase === 'done' || !this.onTable()), color: '#8a6a4a' });
+    }
+  }
+}
+function drawRocket(x, y, ang) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(ang);
+  const fl = 18 + Math.random() * 14; const fg = ctx.createLinearGradient(-20 - fl, 0, -18, 0); fg.addColorStop(0, 'rgba(255,80,0,0)'); fg.addColorStop(1, '#ffd23a');
+  ctx.fillStyle = fg; ctx.beginPath(); ctx.moveTo(-18, -7); ctx.lineTo(-20 - fl, 0); ctx.lineTo(-18, 7); ctx.fill();
+  ctx.fillStyle = '#c02a2a'; ctx.beginPath(); ctx.moveTo(-14, -8); ctx.lineTo(-24, -18); ctx.lineTo(-6, -8); ctx.fill(); ctx.beginPath(); ctx.moveTo(-14, 8); ctx.lineTo(-24, 18); ctx.lineTo(-6, 8); ctx.fill();
+  const bg = ctx.createLinearGradient(0, -10, 0, 10); bg.addColorStop(0, '#fff'); bg.addColorStop(1, '#9aa4b8'); ctx.fillStyle = bg;
+  ctx.beginPath(); ctx.moveTo(-18, -9); ctx.lineTo(10, -9); ctx.quadraticCurveTo(26, -6, 30, 0); ctx.quadraticCurveTo(26, 6, 10, 9); ctx.lineTo(-18, 9); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#3a8ad8'; ctx.beginPath(); circ(6, 0, 4.5); ctx.fill(); ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.restore();
+}
+
+// =====================================================================
+//  SLOTS
+// =====================================================================
+const SLOT_COUNTS = [6, 7, 6, 5, 4, 3, 2, 1], SLOT_PAY = [20, 15, 20, 25, 50, 100, 250, 1000], SLOT_NAMES = ['Cherry', 'Lemon', 'Orange', 'Plum', 'Bell', 'BAR', 'Seven', 'Diamond'];
+const SLOT_BETS = [1, 2, 5, 10, 25, 50, 100];
+const PAYLINES = [[1, 1, 1], [0, 0, 0], [2, 2, 2], [0, 1, 2], [2, 1, 0]], LINE_COL = ['#ffd23a', '#ff5a5a', '#5ab0ff', '#7dff8a', '#ff7bff'];
+function makeStrip() { const a = []; SLOT_COUNTS.forEach((n, i) => { for (let k = 0; k < n; k++) a.push(i); }); return shuffle(a); }
+function drawSym(id, x, y, s) {
+  ctx.save(); ctx.lineJoin = 'round';
+  if (id === 0) {
+    ctx.strokeStyle = '#2f7d1c'; ctx.lineWidth = s * .05; ctx.beginPath(); ctx.moveTo(x - s * .18, y + s * .05); ctx.quadraticCurveTo(x - s * .1, y - s * .25, x + s * .08, y - s * .36); ctx.moveTo(x + s * .2, y + s * .0); ctx.quadraticCurveTo(x + s * .15, y - s * .2, x + s * .08, y - s * .36); ctx.stroke();
+    ctx.fillStyle = '#3fae2a'; ctx.beginPath(); ctx.ellipse(x + s * .2, y - s * .34, s * .14, s * .06, -.4, 0, TAU); ctx.fill();
+    for (const [cx, cy] of [[-.18, .2], [.2, .15]]) { const g = ctx.createRadialGradient(x + cx * s - s * .06, y + cy * s - s * .06, 1, x + cx * s, y + cy * s, s * .2); g.addColorStop(0, '#ff8a8a'); g.addColorStop(1, '#a3000f'); ctx.fillStyle = g; ctx.beginPath(); circ(x + cx * s, y + cy * s, s * .19); ctx.fill(); }
+  } else if (id === 1) {
+    const g = ctx.createRadialGradient(x - s * .1, y - s * .1, 2, x, y, s * .4); g.addColorStop(0, '#fff9a0'); g.addColorStop(1, '#e0b800'); ctx.fillStyle = g;
+    ctx.beginPath(); ctx.ellipse(x, y, s * .36, s * .26, -.2, 0, TAU); ctx.fill(); ctx.beginPath(); ctx.ellipse(x + s * .36, y - s * .07, s * .07, s * .05, -.2, 0, TAU); ctx.ellipse(x - s * .36, y + s * .07, s * .07, s * .05, -.2, 0, TAU); ctx.fill();
+  } else if (id === 2) {
+    const g = ctx.createRadialGradient(x - s * .1, y - s * .1, 2, x, y, s * .36); g.addColorStop(0, '#ffcf70'); g.addColorStop(1, '#e05a00'); ctx.fillStyle = g; ctx.beginPath(); circ(x, y + s * .03, s * .32); ctx.fill();
+    ctx.fillStyle = 'rgba(160,60,0,.35)'; for (let i = 0; i < 8; i++) { ctx.beginPath(); circ(x + Math.cos(i) * s * .18, y + Math.sin(i * 1.7) * s * .18, s * .015); ctx.fill(); }
+    ctx.fillStyle = '#3fae2a'; ctx.beginPath(); ctx.ellipse(x + s * .08, y - s * .3, s * .13, s * .06, -.3, 0, TAU); ctx.fill();
+  } else if (id === 3) {
+    const g = ctx.createRadialGradient(x - s * .1, y - s * .1, 2, x, y, s * .38); g.addColorStop(0, '#d98aff'); g.addColorStop(1, '#4a0a78'); ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(x, y + s * .04, s * .3, s * .34, .2, 0, TAU); ctx.fill();
+    ctx.strokeStyle = '#5a3a10'; ctx.lineWidth = s * .04; ctx.beginPath(); ctx.moveTo(x, y - s * .28); ctx.lineTo(x + s * .05, y - s * .4); ctx.stroke();
+  } else if (id === 4) {
+    const g = ctx.createLinearGradient(x - s * .36, 0, x + s * .36, 0); g.addColorStop(0, '#b8861f'); g.addColorStop(.4, '#fff2b8'); g.addColorStop(1, '#a87a10'); ctx.fillStyle = g;
+    ctx.beginPath(); ctx.moveTo(x - s * .38, y + s * .25); ctx.quadraticCurveTo(x - s * .28, y + s * .12, x - s * .26, y - s * .08); ctx.quadraticCurveTo(x - s * .22, y - s * .38, x, y - s * .38); ctx.quadraticCurveTo(x + s * .22, y - s * .38, x + s * .26, y - s * .08); ctx.quadraticCurveTo(x + s * .28, y + s * .12, x + s * .38, y + s * .25); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#8a5a00'; ctx.beginPath(); circ(x, y + s * .31, s * .08); ctx.fill(); circ(x, y - s * .42, s * .05); ctx.fill();
+  } else if (id === 5) {
+    rr(x - s * .42, y - s * .2, s * .84, s * .4, s * .06); ctx.fillStyle = '#111'; ctx.fill(); ctx.strokeStyle = '#e8c14a'; ctx.lineWidth = s * .04; ctx.stroke();
+    T('BAR', x, y + s * .02, Math.round(s * .3), '#fff', 'center', 'bold', 'Impact, Arial Black, sans-serif');
+  } else if (id === 6) {
+    ctx.font = 'bold ' + Math.round(s * .95) + 'px Impact, Arial Black, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.lineWidth = s * .08; ctx.strokeStyle = '#3a0006'; ctx.strokeText('7', x, y + s * .04); const g = ctx.createLinearGradient(0, y - s * .4, 0, y + s * .4); g.addColorStop(0, '#ff6a6a'); g.addColorStop(1, '#b0000e'); ctx.fillStyle = g; ctx.fillText('7', x, y + s * .04);
+  } else {
+    const g = ctx.createLinearGradient(x, y - s * .3, x, y + s * .38); g.addColorStop(0, '#d8fbff'); g.addColorStop(1, '#1c8fd0'); ctx.fillStyle = g;
+    ctx.beginPath(); ctx.moveTo(x - s * .2, y - s * .28); ctx.lineTo(x + s * .2, y - s * .28); ctx.lineTo(x + s * .38, y - s * .08); ctx.lineTo(x, y + s * .38); ctx.lineTo(x - s * .38, y - s * .08); ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = 1.2; ctx.beginPath(); ctx.moveTo(x - s * .38, y - s * .08); ctx.lineTo(x + s * .38, y - s * .08); ctx.moveTo(x - s * .1, y - s * .28); ctx.lineTo(x - s * .15, y - s * .08); ctx.lineTo(x, y + s * .38); ctx.lineTo(x + s * .15, y - s * .08); ctx.lineTo(x + s * .1, y - s * .28); ctx.stroke();
+  }
+  ctx.restore();
+}
+class Slots extends Game {
+  constructor() { super(); this.reels = [0, 1, 2].map(() => { const strip = makeStrip(); return { strip, pos: rint(strip.length), spin: false, bounce: 0 }; }); this.lines = 5; this.bi = 1; this.win = 0; this.wl = []; this.lever = 0; this.lastWin = 0; }
+  get bpl() { return SLOT_BETS[this.bi]; }
+  total() { return this.lines * this.bpl; }
+  onTable() { return this.phase === 'spin' ? this.total() : 0; }
+  canLeave() { return this.phase !== 'spin'; }
+  leave() { }
+  spin() {
+    if (this.phase === 'spin') return;
+    if (S.chips < this.total()) {
+      while (this.bi > 0 && S.chips < this.total()) this.bi--; while (this.lines > 1 && S.chips < this.total()) this.lines -= 2;
+      if (S.chips < this.total()) { toast('Not enough chips'); return; } toast('Bet lowered to fit your chips'); return;
+    }
+    S.chips -= this.total(); this.win = 0; this.wl = []; this.phase = 'spin'; this.lever = 1; Snd.lever(); this.banner = null;
+    this.reels.forEach((r, i) => { const L = r.strip.length; r.from = r.pos; r.to = Math.ceil(r.pos / L) * L + L * (3 + i) + rint(L); r.t = 0; r.dur = 1.3 + i * .5; r.spin = true; r.lastI = Math.floor(r.pos); });
+  }
+  update(dt) {
+    this.lever = Math.max(0, this.lever - dt * 1.6);
+    for (const r of this.reels) r.bounce = Math.max(0, r.bounce - dt * 4);
+    if (this.phase !== 'spin') return; let all = true;
+    this.reels.forEach(r => {
+      if (!r.spin) return; r.t += dt; const u = Math.min(1, r.t / r.dur); r.pos = r.from + (r.to - r.from) * easeOutCubic(u);
+      if (Math.floor(r.pos) !== r.lastI) { r.lastI = Math.floor(r.pos); if (u > .6) Snd.tick(); }
+      if (u >= 1) { r.spin = false; r.pos = r.to % r.strip.length; r.bounce = 1; Snd.thunk(); } else all = false;
+    });
+    if (all) this.evaluate();
+  }
+  sym(r, row) { const L = r.strip.length, idx = Math.round(r.pos); return r.strip[((idx + 1 - row) % L + L) % L]; }
+  evaluate() {
+    this.phase = 'bet'; let win = 0; this.wl = [];
+    for (let l = 0; l < this.lines; l++) {
+      const s = [0, 1, 2].map(c => this.sym(this.reels[c], PAYLINES[l][c])); let m = 0;
+      if (s[0] === s[1] && s[1] === s[2]) m = SLOT_PAY[s[0]]; else if (s[0] === 0 && s[1] === 0) m = 5; else if (s[0] === 0) m = 1;
+      if (m) { win += m * this.bpl; this.wl.push({ l, m, cells: m >= 5 && s[0] === s[1] && s[1] === s[2] ? 3 : m === 5 ? 2 : 1 }); }
+    }
+    this.win = win;
+    if (win > 0) {
+      S.chips += win; this.lastWin = win; popNet(640, 470, win - this.total());
+      if (win >= this.total() * 10) { Snd.big(); this.say('BIG WIN!', '#ffd23a', fmt(win), 3.5); for (let i = 0; i < 4; i++) burst(400 + i * 160, 300, 25, ['#ffd23a', '#fff2b8', '#e0a21a'], 300, 500, 5); }
+      else Snd.win();
+    }
+  }
+  hot(k) { if (k === ' ' || k === 'enter') this.spin(); }
+  draw() {
+    ctx.drawImage(BOKEH, 0, 0);
+    // neighbouring machines (silhouettes)
+    for (const x of [-150, 1130]) { rr(x, 120, 300, 700, 30); ctx.fillStyle = 'rgba(40,20,50,.8)'; ctx.fill(); rr(x + 50, 250, 200, 140, 10); ctx.fillStyle = 'rgba(255,200,120,.08)'; ctx.fill(); }
+    // --- paytable panel
+    rr(28, 80, 290, 560, 16); ctx.fillStyle = 'rgba(15,5,20,.88)'; ctx.fill(); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+    T('PAYTABLE', 173, 106, 18, '#e8c14a', 'center', 'bold', SERIF); T('× bet per line', 173, 126, 12, 'rgba(255,255,255,.6)', 'center', 'normal');
+    for (let i = 7; i >= 0; i--) { const y = 160 + (7 - i) * 48; for (let k = 0; k < 3; k++) drawSym(i, 62 + k * 44, y, 38); T(String(SLOT_PAY[i]), 290, y, 20, '#ffe9a6', 'right', 'bold'); }
+    drawSym(0, 62, 548, 38); drawSym(0, 106, 548, 38); T('any', 150, 548, 13, 'rgba(255,255,255,.6)', 'left', 'normal'); T('5', 290, 548, 20, '#ffe9a6', 'right', 'bold');
+    drawSym(0, 62, 596, 38); T('any any', 106, 596, 13, 'rgba(255,255,255,.6)', 'left', 'normal'); T('1', 290, 596, 20, '#ffe9a6', 'right', 'bold');
+    // --- lines panel
+    rr(1000, 80, 252, 560, 16); ctx.fillStyle = 'rgba(15,5,20,.88)'; ctx.fill(); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+    T('PAYLINES', 1126, 106, 18, '#e8c14a', 'center', 'bold', SERIF);
+    PAYLINES.forEach((pl, l) => {
+      const x0 = 1050, y0 = 140 + l * 96, on = l < this.lines; ctx.globalAlpha = on ? 1 : .3;
+      for (let r = 0; r < 3; r++) for (let c = 0; c < 3; c++) { ctx.fillStyle = pl[c] === r ? LINE_COL[l] : 'rgba(255,255,255,.12)'; ctx.fillRect(x0 + c * 30, y0 + r * 24, 26, 20); }
+      T('LINE ' + (l + 1), x0 + 150, y0 + 34, 15, LINE_COL[l], 'center', 'bold'); ctx.globalAlpha = 1;
+    });
+    // --- cabinet
+    ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 40;
+    ctx.beginPath(); ctx.moveTo(340, 800); ctx.lineTo(340, 170); ctx.quadraticCurveTo(340, 64, 640, 60); ctx.quadraticCurveTo(940, 64, 940, 170); ctx.lineTo(940, 800); ctx.closePath();
+    const cg = ctx.createLinearGradient(340, 0, 940, 0); cg.addColorStop(0, '#5a0a1a'); cg.addColorStop(.5, '#a01830'); cg.addColorStop(1, '#4a0814'); ctx.fillStyle = cg; ctx.fill(); ctx.restore();
+    ctx.strokeStyle = '#e8c14a'; ctx.lineWidth = 4; ctx.stroke();
+    // bulbs
+    for (let i = 0; i < 26; i++) { const a = Math.PI + i / 25 * Math.PI, x = 640 + Math.cos(a) * 280, y = 175 + Math.sin(a) * 100; const on = (Math.floor(S.time * 6) + i) % 3 === 0 || this.phase === 'spin' && (Math.floor(S.time * 14) + i) % 2 === 0; ctx.beginPath(); circ(x, y, 6); ctx.fillStyle = on ? '#fff6b0' : '#7a5a20'; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = on ? 14 : 0; ctx.fill(); ctx.shadowBlur = 0; }
+    ctx.save(); ctx.shadowColor = '#ff3a6a'; ctx.shadowBlur = 25 + Math.sin(S.time * 3) * 8;
+    T('LUCKY SEVENS', 640, 150, 50, '#ffe0ea', 'center', 'bold', SERIF); ctx.restore();
+    ctx.fillStyle = goldGrad(118, 182); ctx.font = 'bold 50px ' + SERIF; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.globalAlpha = .35; ctx.fillText('LUCKY SEVENS', 640, 150); ctx.globalAlpha = 1;
+    T('5 LINES · 3 REELS', 640, 196, 13, '#ffe9a6');
+    // reel window
+    rr(372, 222, 536, 276, 16); ctx.fillStyle = '#1a0a04'; ctx.fill(); ctx.strokeStyle = goldGrad(222, 498); ctx.lineWidth = 8; ctx.stroke();
+    this.reels.forEach((r, i) => {
+      const x = 390 + i * 170, w = 160, cx = x + w / 2; ctx.save(); rr(x, 236, w, 248, 8); ctx.clip();
+      const bg = ctx.createLinearGradient(0, 236, 0, 484); bg.addColorStop(0, '#9a9a9a'); bg.addColorStop(.2, '#fff'); bg.addColorStop(.8, '#fff'); bg.addColorStop(1, '#9a9a9a'); ctx.fillStyle = bg; ctx.fillRect(x, 236, w, 248);
+      const L = r.strip.length, base = Math.floor(r.pos), bo = r.bounce ? Math.sin(r.bounce * Math.PI) * 10 : 0;
+      const fast = r.spin && (r.t / r.dur) < .75;
+      for (let j = base - 2; j <= base + 3; j++) { const y = 360 - (j - r.pos) * 82 + bo; if (fast) { ctx.globalAlpha = .55; drawSym(r.strip[(j % L + L) % L], cx, y - 12, 70); ctx.globalAlpha = .45; drawSym(r.strip[(j % L + L) % L], cx, y + 12, 70); ctx.globalAlpha = 1; } else drawSym(r.strip[(j % L + L) % L], cx, y, 70); }
+      const sh = ctx.createLinearGradient(0, 236, 0, 484); sh.addColorStop(0, 'rgba(0,0,0,.55)'); sh.addColorStop(.25, 'rgba(0,0,0,0)'); sh.addColorStop(.75, 'rgba(0,0,0,0)'); sh.addColorStop(1, 'rgba(0,0,0,.55)'); ctx.fillStyle = sh; ctx.fillRect(x, 236, w, 248);
+      ctx.restore();
+    });
+    // line markers
+    [360, 278, 442, 250, 470].forEach((y, l) => { const on = l < this.lines; for (const x of [381, 899]) { ctx.beginPath(); circ(x, y, 9); ctx.fillStyle = on ? LINE_COL[l] : '#333'; ctx.fill(); T(String(l + 1), x, y + 1, 11, on ? '#000' : '#777'); } });
+    // winning lines
+    if (this.phase !== 'spin' && this.wl.length) {
+      const blink = Math.floor(S.time * 3) % 2 === 0 || this.lastShow;
+      this.wl.forEach(w => { const pl = PAYLINES[w.l]; ctx.strokeStyle = LINE_COL[w.l]; ctx.lineWidth = 5; ctx.shadowColor = LINE_COL[w.l]; ctx.shadowBlur = blink ? 16 : 4; ctx.beginPath(); pl.forEach((row, c) => { const x = 470 + c * 170, y = 278 + row * 82; c ? ctx.lineTo(x, y) : ctx.moveTo(381, y); }); ctx.lineTo(899, 278 + pl[2] * 82); ctx.stroke(); ctx.shadowBlur = 0; });
+    }
+    // LED displays
+    const led = (x, w, label, val, col) => { T(label, x + w / 2, 516, 11, '#ffe9a6'); rr(x, 526, w, 40, 6); ctx.fillStyle = '#060202'; ctx.fill(); ctx.strokeStyle = '#555'; ctx.lineWidth = 1; ctx.stroke(); ctx.shadowColor = col; ctx.shadowBlur = 10; T(val, x + w - 10, 547, 24, col, 'right', 'bold', 'Courier New, monospace'); ctx.shadowBlur = 0; };
+    led(372, 200, 'CREDITS', fmt(S.chips), '#ff4a3a'); led(584, 140, 'TOTAL BET', fmt(this.total()), '#ffb02a'); led(736, 172, 'WIN', fmt(this.win), '#4aff6a');
+    // buttons
+    const en = this.phase !== 'spin';
+    button(372, 590, 104, 54, 'LINES ' + this.lines, () => { this.lines = this.lines === 5 ? 1 : this.lines + 2; }, { enabled: en, color: '#3a6ad8', text: '#fff', size: 16 });
+    button(484, 590, 70, 54, 'BET –', () => { this.bi = Math.max(0, this.bi - 1); }, { enabled: en && this.bi > 0, size: 15 });
+    button(560, 590, 70, 54, 'BET +', () => { this.bi = Math.min(SLOT_BETS.length - 1, this.bi + 1); }, { enabled: en && this.bi < SLOT_BETS.length - 1, size: 15 });
+    T(fmt(this.bpl) + '/line', 557, 656, 12, '#ffe9a6');
+    button(638, 590, 100, 54, 'MAX BET', () => { this.lines = 5; let b = SLOT_BETS.length - 1; while (b > 0 && SLOT_BETS[b] * 5 > S.chips) b--; this.bi = b; this.spin(); }, { enabled: en, color: '#e0a21a', size: 15 });
+    button(746, 590, 162, 54, 'SPIN', () => this.spin(), { enabled: en, color: '#d82a3a', text: '#fff', size: 26 });
+    // coin tray
+    rr(460, 690, 360, 70, 12); const tg = ctx.createLinearGradient(0, 690, 0, 760); tg.addColorStop(0, '#111'); tg.addColorStop(1, '#3a3a3a'); ctx.fillStyle = tg; ctx.fill(); ctx.strokeStyle = '#c9c9c9'; ctx.lineWidth = 3; ctx.stroke();
+    T('PLAY CHIPS ONLY · NO CASH VALUE', 640, 725, 12, 'rgba(255,255,255,.4)');
+    // lever
+    const la = this.lever > 0 ? Math.sin(Math.min(1, this.lever) * Math.PI) : 0, py = 420, len = 170;
+    const ky = py - len * Math.cos(la * Math.PI * .85), kr = 22 + Math.sin(la * Math.PI * .85) * 8;
+    rr(940, 390, 26, 70, 6); ctx.fillStyle = '#888'; ctx.fill(); ctx.strokeStyle = '#444'; ctx.stroke();
+    ctx.strokeStyle = '#d8d8d8'; ctx.lineWidth = 10; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(975, py); ctx.lineTo(975, ky); ctx.stroke(); ctx.lineCap = 'butt';
+    ctx.beginPath(); circ(975, py, 14); ctx.fillStyle = '#666'; ctx.fill();
+    const kg = ctx.createRadialGradient(968, ky - 8, 2, 975, ky, kr); kg.addColorStop(0, '#ff9a9a'); kg.addColorStop(1, '#a0000e'); ctx.fillStyle = kg; ctx.beginPath(); circ(975, ky, kr); ctx.fill();
+    if (en && over(945, 220, 60, 90)) { ctx.beginPath(); circ(975, ky, kr + 4); ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke(); T('PULL!', 975, 205, 14, '#fff'); }
+    if (en) region(945, 220, 60, 90, () => this.spin());
+    drawParts();
+    this.drawBanner(360);
+  }
+}
+
+// =====================================================================
+//  GAME REGISTRY
+// =====================================================================
+const GAMES = [
+  {
+    key: 'blackjack', name: 'Blackjack', tag: 'Beat the dealer to 21', color: '#0e6b3a', make: () => new Blackjack(), icon: iconBJ,
+    rules: ['Get closer to 21 than the dealer without going over.', 'Number cards count face value, J/Q/K count 10, and Aces count 1 or 11.', 'Click a chip in the rack to put it in the betting circle (right-click the circle to take it back), then press DEAL.', 'HIT takes another card and STAND keeps your total. DOUBLE doubles your bet for exactly one more card. SPLIT turns a pair into two separate hands.', 'The dealer draws to 16 and stands on all 17s. Six-deck shoe, no insurance.', 'Keys: Space deals or stands, then H, S, D and P.'],
+    pays: [['Blackjack', '3 : 2'], ['Win', '1 : 1'], ['Push (tie)', 'Bet back'], ['Double / Split', '1 : 1 each']]
+  },
+  {
+    key: 'holdem', name: "Casino Hold'em", tag: 'Heads-up poker vs the house', color: '#11406e', make: () => new Holdem(), icon: iconHoldem,
+    rules: ['Poker against the dealer. There are no other players.', 'Put chips on ANTE and press DEAL. You and the dealer get two cards each, and three community cards (the flop) are dealt.', 'Decide: FOLD and lose the ante, or CALL by betting 2× the ante.', 'The turn and river complete the board. Each hand is the best 5 of its 7 cards.', 'The dealer needs a pair of 4s or better to qualify. If the dealer does not qualify, your ante pays by the table and your call comes back.', 'If the dealer qualifies and you win, the ante pays by the table and the call pays 1:1. You need 2× the ante in reserve to be dealt in.'],
+    pays: [['Royal Flush', '100 : 1'], ['Straight Flush', '20 : 1'], ['Four of a Kind', '10 : 1'], ['Full House', '3 : 1'], ['Flush', '2 : 1'], ['Straight or less', '1 : 1'], ['Call bet', '1 : 1']]
+  },
+  {
+    key: 'slots', name: 'Lucky Sevens', tag: '3-reel, 5-line slot machine', color: '#5a1a6b', make: () => new Slots(), icon: iconSlots,
+    rules: ['A classic three-reel slot machine with five paylines.', 'LINES switches between 1, 3 and 5 active lines. BET – / + sets the bet per line. Total bet = lines × bet per line.', 'Press SPIN, pull the red lever, or press Space.', 'Line 1 is the middle row, 2 the top, 3 the bottom, and 4 and 5 are the diagonals.', 'Wins pay left to right on active lines and are multiplied by your bet per line. Cherries pay even as one or two on the left.', 'MAX BET plays all five lines at the largest bet you can afford.'],
+    pays: [['3 × Diamond', '1000×'], ['3 × Seven', '250×'], ['3 × BAR', '100×'], ['3 × Bell', '50×'], ['3 × Plum', '25×'], ['3 × Orange / Cherry', '20×'], ['3 × Lemon', '15×'], ['Cherry, Cherry', '5×'], ['Cherry', '1×']]
+  },
+  {
+    key: 'roulette', name: 'Roulette', tag: 'European single-zero wheel', color: '#6b1320', make: () => new Roulette(), icon: iconRoulette,
+    rules: ['A European wheel with the numbers 0 to 36.', 'Pick a chip value in the rack, then click any number or outside box to bet. Right-click a spot to remove its chips. Bet on as many spots as you like.', 'Press SPIN. The ball lands in one pocket, and every bet covering that number wins.', 'Hover over an outside bet to see which numbers it covers.', 'Zero is green, so it loses every outside bet.'],
+    pays: [['Single number', '35 : 1'], ['Column (2 to 1)', '2 : 1'], ['Dozen', '2 : 1'], ['Red / Black', '1 : 1'], ['Odd / Even', '1 : 1'], ['1–18 / 19–36', '1 : 1']]
+  },
+  {
+    key: 'craps', name: 'Craps', tag: 'Roll the bones', color: '#0f5f45', make: () => new Craps(), icon: iconCraps,
+    rules: ['You are the shooter. Bet, then ROLL two dice.', 'Come-out roll: PASS wins on 7 or 11 and loses on 2, 3 or 12. Any other total becomes the POINT.', 'With a point set, keep rolling. PASS wins if the point comes again before a 7. A 7 first is a seven-out and PASS loses.', "DON'T PASS is the opposite, and a 12 on the come-out pushes. Both bets go down only before a point.", 'FIELD, ANY 7 and ANY CRAPS are one-roll bets. BIG 6 and BIG 8 win if that number rolls before a 7.', 'Winning bets stay on the table and the winnings go to your stack.'],
+    pays: [['Pass / Don\'t Pass', '1 : 1'], ['Field (3,4,9,10,11)', '1 : 1'], ['Field 2', '2 : 1'], ['Field 12', '3 : 1'], ['Big 6 / Big 8', '1 : 1'], ['Any Seven', '4 : 1'], ['Any Craps', '7 : 1']]
+  },
+  {
+    key: 'crash', name: 'Rocket Crash', tag: 'Cash out before it blows', color: '#1a1f4a', make: () => new Crash(), icon: iconCrash,
+    rules: ['Put chips on your bet and press LAUNCH.', 'The multiplier climbs from 1.00× as the rocket flies. It can crash at any moment, sometimes right at launch.', 'Press CASH OUT before the crash to win your bet × the current multiplier. If the rocket crashes first, you lose the bet.', 'AUTO CASH-OUT grabs a target multiplier for you.', 'The Space bar launches and cashes out.'],
+    pays: [['Cash out at 1.50×', '1.5 × bet'], ['Cash out at 2.00×', '2 × bet'], ['Cash out at 10×', '10 × bet'], ['Maximum', '1000×'], ['Crash at 1.00×', '~3% of rounds']]
+  },
+  {
+    key: 'baccarat', name: 'Baccarat', tag: 'Player, Banker or Tie', color: '#7a1e2a', make: () => new Baccarat(), icon: iconBaccarat,
+    rules: ['Bet on which hand ends closest to 9: PLAYER, BANKER or a TIE.', 'Cards 2 to 9 count face value, Aces count 1, and 10s and face cards count 0. Only the last digit of a total counts, so 7 + 8 = 5.', 'Each hand gets two cards. An 8 or 9 is a natural and ends the round.', 'Otherwise the classic third-card rules are applied for you. Player draws on 0 to 5, and Banker draws based on its total and the Player\'s third card.', 'On a tie, PLAYER and BANKER bets push.'],
+    pays: [['Player', '1 : 1'], ['Banker', '0.95 : 1'], ['Tie', '8 : 1']]
+  }
+];
+
+// ---------------- menu icons ----------------
+function iconBJ(x, y, w, h) { const cx = x + w / 2, cy = y + h / 2 + 4; drawCard({ x: cx - 26, y: cy, r: 1, s: 0, f: 1, rot: -.22, sc: .9 }); drawCard({ x: cx + 26, y: cy, r: 13, s: 1, f: 1, rot: .22, sc: .9 }); drawStack(cx - 96, cy + 30, 125, 20, false); drawStack(cx + 98, cy + 30, 500, 20, false); }
+function iconHoldem(x, y, w, h) { const cx = x + w / 2, cy = y + h / 2; [[1, 2], [13, 2], [12, 2], [11, 2], [10, 2]].forEach((c, i) => drawCard({ x: cx - 88 + i * 44, y: cy - 6, r: c[0], s: c[1], f: 1, rot: 0, sc: .5 })); drawCard({ x: cx - 18, y: cy + 38, r: 1, s: 0, f: 1, rot: -.15, sc: .45 }); drawCard({ x: cx + 18, y: cy + 38, r: 1, s: 3, f: 1, rot: .15, sc: .45 }); }
+function iconSlots(x, y, w, h) { const cx = x + w / 2, cy = y + h / 2; rr(cx - 100, cy - 44, 200, 88, 12); ctx.fillStyle = '#a01830'; ctx.fill(); ctx.strokeStyle = '#e8c14a'; ctx.lineWidth = 3; ctx.stroke(); for (let i = 0; i < 3; i++) { rr(cx - 88 + i * 60, cy - 34, 56, 68, 6); ctx.fillStyle = '#fff'; ctx.fill(); drawSym(6, cx - 60 + i * 60, cy, 54); } ctx.strokeStyle = '#ffd23a'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(cx - 96, cy); ctx.lineTo(cx + 96, cy); ctx.stroke(); }
+function iconRoulette(x, y, w, h) { drawWheel(x + w / 2, y + h / 2, .3, S.time * .4, S.time * .4 + 1, 134); }
+function iconCraps(x, y, w, h) { const cx = x + w / 2, cy = y + h / 2; drawDie(cx - 34, cy + 4, 56, 5, -.25); drawDie(cx + 38, cy - 6, 56, 6, .3); }
+function iconCrash(x, y, w, h) { ctx.save(); rr(x + 20, y + 10, w - 40, h - 20, 10); ctx.fillStyle = '#0a1030'; ctx.fill(); ctx.clip(); ctx.strokeStyle = '#ffd23a'; ctx.lineWidth = 4; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = 10; ctx.beginPath(); ctx.moveTo(x + 30, y + h - 20); ctx.quadraticCurveTo(x + w * .6, y + h - 26, x + w - 60, y + 36); ctx.stroke(); ctx.shadowBlur = 0; drawRocket(x + w - 58, y + 38, -1.0); T('2.47×', x + 90, y + 40, 26, '#fff', 'center', 'bold'); ctx.restore(); }
+function iconBaccarat(x, y, w, h) { const cx = x + w / 2, cy = y + h / 2 + 6; drawCard({ x: cx - 80, y: cy, r: 9, s: 2, f: 1, rot: -.1, sc: .6 }); drawCard({ x: cx - 44, y: cy, r: 13, s: 3, f: 1, rot: .05, sc: .6 }); drawCard({ x: cx + 44, y: cy, r: 4, s: 1, f: 1, rot: -.05, sc: .6 }); drawCard({ x: cx + 80, y: cy, r: 3, s: 0, f: 1, rot: .1, sc: .6 }); T('P 9', cx - 62, cy - 52, 14, '#6fb6ff'); T('B 7', cx + 62, cy - 52, 14, '#ff8b8b'); }
+
+// =====================================================================
+//  SCENES
+// =====================================================================
+function enterGame(def) { S.def = def; S.scene = 'intro'; S.overlay = false; }
+function sit() { const d = S.def; if (!S.inst[d.key]) S.inst[d.key] = d.make(); S.game = S.inst[d.key]; S.scene = 'game'; PARTS.length = 0; }
+function toLobby() { if (S.game) S.game.leave(); S.game = null; S.scene = 'menu'; S.overlay = false; PARTS.length = 0; save(); }
+function restart() { S.chips = 1000; S.inst = {}; S.game = null; S.scene = 'menu'; S.bustT = 0; S.denom = 25; PARTS.length = 0; save(); Snd.win(); }
+
+function drawMarquee() {
+  const x = 250, y = 16, w = 780, h = 122;
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 30; rr(x, y, w, h, 18); const g = ctx.createLinearGradient(0, y, 0, y + h); g.addColorStop(0, '#2a0508'); g.addColorStop(1, '#120204'); ctx.fillStyle = g; ctx.fill(); ctx.restore();
+  rr(x, y, w, h, 18); ctx.strokeStyle = goldGrad(y, y + h); ctx.lineWidth = 5; ctx.stroke();
+  const per = 2 * (w + h) - 60, n = 64;
+  for (let i = 0; i < n; i++) {
+    let d = i / n * per, bx, by; const W2 = w - 30, H2 = h - 30;
+    if (d < W2) { bx = x + 15 + d; by = y + 12; } else if ((d -= W2) < H2) { bx = x + w - 12; by = y + 15 + d; } else if ((d -= H2) < W2) { bx = x + w - 15 - d; by = y + h - 12; } else { d -= W2; bx = x + 12; by = y + h - 15 - Math.min(d, H2); }
+    const on = (i + Math.floor(S.time * 8)) % 4 < 2;
+    ctx.beginPath(); circ(bx, by, 4); ctx.fillStyle = on ? '#fff3b0' : '#6a4a18'; ctx.shadowColor = '#ffd23a'; ctx.shadowBlur = on ? 10 : 0; ctx.fill(); ctx.shadowBlur = 0;
+  }
+  ctx.save(); ctx.font = 'bold 58px ' + SERIF; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.shadowColor = 'rgba(255,190,60,.8)'; ctx.shadowBlur = 20 + Math.sin(S.time * 2) * 6; ctx.fillStyle = goldGrad(40, 104); ctx.fillText('ROYAL CHIP CASINO', 640, 70); ctx.restore();
+  T('★  PLAY CHIPS ONLY · NO REAL MONEY  ★', 640, 114, 14, '#f3c8c8', 'center', 'bold');
+}
+function drawMenu() {
+  ctx.drawImage(CARPET, 0, 0);
+  // light beams
+  for (let i = 0; i < 3; i++) { const g = ctx.createRadialGradient(240 + i * 400, -50, 10, 240 + i * 400, -50, 500); g.addColorStop(0, 'rgba(255,220,150,.12)'); g.addColorStop(1, 'rgba(255,220,150,0)'); ctx.fillStyle = g; ctx.fillRect(0, 0, W, H); }
+  drawMarquee();
+  // chips plaque
+  rr(470, 150, 340, 44, 22); ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fill(); ctx.strokeStyle = '#c9a13b'; ctx.lineWidth = 2; ctx.stroke();
+  drawChip(500, 172, 15, 100); T('YOUR CHIPS', 528, 172, 13, '#e8c14a', 'left', 'bold'); T(fmt(S.chips), 790, 173, 24, '#fff', 'right', 'bold', SERIF);
+  // cards
+  const cw = 272, ch = 238;
+  GAMES.forEach((g, i) => {
+    const row = i < 4 ? 0 : 1, col = row ? i - 4 : i, n = row ? 3 : 4, x0 = (W - (n * cw + (n - 1) * 26)) / 2, x = x0 + col * (cw + 26), yb = 212 + row * 262;
+    const hov = over(x, yb, cw, ch), y = yb - (hov ? 6 : 0);
+    ctx.save(); ctx.shadowColor = hov ? 'rgba(255,200,80,.5)' : 'rgba(0,0,0,.7)'; ctx.shadowBlur = hov ? 30 : 18; ctx.shadowOffsetY = 6;
+    rr(x, y, cw, ch, 16); const gg = ctx.createLinearGradient(0, y, 0, y + ch); gg.addColorStop(0, shade(g.color, .12)); gg.addColorStop(1, shade(g.color, -.55)); ctx.fillStyle = gg; ctx.fill(); ctx.restore();
+    ctx.save(); rr(x, y, cw, ch, 16); ctx.clip(); ctx.globalAlpha = .07; ctx.fillStyle = NOISE_PAT; ctx.fillRect(x, y, cw, ch); ctx.restore();
+    rr(x + 10, y + 10, cw - 20, 150, 10); ctx.fillStyle = 'rgba(0,0,0,.28)'; ctx.fill();
+    ctx.save(); rr(x + 10, y + 10, cw - 20, 150, 10); ctx.clip(); g.icon(x + 10, y + 10, cw - 20, 150); ctx.restore();
+    rr(x, y, cw, ch, 16); ctx.strokeStyle = hov ? '#fff0b0' : '#c9a13b'; ctx.lineWidth = hov ? 3 : 2; ctx.stroke();
+    rr(x + 5, y + 5, cw - 10, ch - 10, 12); ctx.strokeStyle = 'rgba(232,193,74,.3)'; ctx.lineWidth = 1; ctx.stroke();
+    T(g.name.toUpperCase(), x + cw / 2, y + 188, 23, '#ffe39a', 'center', 'bold', SERIF);
+    T(g.tag, x + cw / 2, y + 216, 14, 'rgba(255,255,255,.75)', 'center', 'normal');
+    region(x, y, cw, ch, () => { Snd.click(); enterGame(g); });
+  });
+  T('Best bankroll: ' + fmt(S.best), 40, 780, 14, 'rgba(255,233,166,.7)', 'left', 'normal');
+  const armed = S.time - S.resetArm < 3;
+  button(1040, 760, 200, 32, armed ? 'Click again to confirm' : 'Restart with $1,000', () => { if (armed) { S.resetArm = -99; restart(); toast('Fresh bankroll: $1,000'); } else S.resetArm = S.time; }, { color: armed ? '#b23a3a' : '#5a3a2a', text: '#fff', size: 13 });
+  soundBtn(986, 760);
+}
+function soundBtn(x, y) { button(x, y, 44, 32, S.sound ? '♪' : '×', () => { S.sound = !S.sound; save(); }, { color: '#5a3a2a', text: '#fff', size: 18 }); }
+function drawIntro(def, overlay) {
+  if (!overlay) ctx.drawImage(CARPET, 0, 0);
+  ctx.fillStyle = 'rgba(0,0,0,.62)'; ctx.fillRect(0, 0, W, H);
+  if (overlay) region(0, 0, W, H, () => { }, true);
+  const x = 110, y = 40, w = 1060, h = 720;
+  ctx.save(); ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 40; rr(x, y, w, h, 24); ctx.fillStyle = '#000'; ctx.fill(); ctx.restore();
+  rr(x, y, w, h, 24); feltFill(def.color, 640, 300); ctx.strokeStyle = goldGrad(y, y + h); ctx.lineWidth = 6; ctx.stroke();
+  rr(x + 12, y + 12, w - 24, h - 24, 16); ctx.strokeStyle = 'rgba(232,193,74,.4)'; ctx.lineWidth = 1.5; ctx.stroke();
+  ctx.save(); rr(x + 30, y + 26, 250, 130, 12); ctx.fillStyle = 'rgba(0,0,0,.3)'; ctx.fill(); ctx.clip(); def.icon(x + 30, y + 16, 250, 150); ctx.restore();
+  ctx.save(); ctx.font = 'bold 54px ' + SERIF; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.shadowColor = 'rgba(0,0,0,.6)'; ctx.shadowBlur = 10; ctx.fillStyle = goldGrad(y + 50, y + 110); ctx.fillText(def.name.toUpperCase(), x + 310, y + 78); ctx.restore();
+  T(def.tag, x + 312, y + 126, 20, 'rgba(255,255,255,.8)', 'left', 'italic', SERIF);
+  ctx.fillStyle = 'rgba(232,193,74,.5)'; ctx.fillRect(x + 30, y + 172, w - 60, 2);
+  T('HOW TO PLAY', x + 40, y + 200, 16, '#e8c14a', 'left', 'bold');
+  let size = 19, lines;
+  for (; size >= 13; size--) { ctx.font = 'normal ' + size + 'px ' + SANS; lines = def.rules.map(r => wrap(r, 590)); const tot = lines.reduce((s, l) => s + l.length * size * 1.35 + 10, 0); if (tot <= 400) break; }
+  let ly = y + 232;
+  lines.forEach(ls => { ctx.beginPath(); circ(x + 48, ly, 4); ctx.fillStyle = '#e8c14a'; ctx.fill(); ls.forEach(l => { T(l, x + 62, ly, size, '#f7efd8', 'left', 'normal'); ly += size * 1.35; }); ly += 10; });
+  const px = x + 700, pw = 320;
+  T('PAYOUTS', px, y + 200, 16, '#e8c14a', 'left', 'bold');
+  rr(px - 10, y + 216, pw, def.pays.length * 36 + 16, 10); ctx.fillStyle = 'rgba(0,0,0,.35)'; ctx.fill(); ctx.strokeStyle = 'rgba(232,193,74,.5)'; ctx.lineWidth = 1; ctx.stroke();
+  def.pays.forEach((p, i) => { const ry = y + 242 + i * 36; T(p[0], px + 6, ry, 16, '#fff', 'left', 'normal'); T(p[1], px + pw - 26, ry, 16, '#ffe39a', 'right', 'bold'); if (i < def.pays.length - 1) { ctx.fillStyle = 'rgba(255,255,255,.1)'; ctx.fillRect(px, ry + 18, pw - 20, 1); } });
+  T('Your chips: ' + fmt(S.chips), 640, y + h - 60, 18, '#ffe9a6', 'center', 'bold');
+  if (overlay) button(530, y + h - 40 - 24, 220, 52, 'RESUME', () => { S.overlay = false; }, { color: '#2f9e55', text: '#fff', size: 20 });
+  else {
+    button(x + 40, y + h - 88, 200, 56, '◀  LOBBY', () => { S.scene = 'menu'; }, { color: '#8a6a4a', size: 18 });
+    button(x + w - 280, y + h - 88, 240, 56, 'TAKE A SEAT  ▸', () => sit(), { color: '#2f9e55', text: '#fff', size: 20 });
+  }
+}
+function drawHUD() {
+  const g = S.game, gr = ctx.createLinearGradient(0, 0, 0, 56); gr.addColorStop(0, '#1e0a06'); gr.addColorStop(1, '#0c0402');
+  ctx.fillStyle = gr; ctx.fillRect(0, 0, W, 56); ctx.fillStyle = '#c9a13b'; ctx.fillRect(0, 55, W, 2);
+  const can = g.canLeave();
+  button(12, 10, 124, 36, '◀ LOBBY', toLobby, { enabled: can, color: '#8a6a4a', size: 15 });
+  if (!can && over(12, 10, 124, 36)) T('Finish the round first', 150, 28, 13, '#ffb86b', 'left', 'normal');
+  ctx.save(); ctx.font = 'bold 28px ' + SERIF; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillStyle = goldGrad(12, 44); ctx.fillText(S.def.name.toUpperCase(), 640, 29); ctx.restore();
+  drawChip(930, 28, 14, 100); T('CHIPS', 952, 28, 12, '#e8c14a', 'left', 'bold'); T(fmt(S.chips), 1110, 29, 24, '#fff', 'right', 'bold', SERIF);
+  button(1124, 10, 90, 36, 'RULES', () => { S.overlay = true; }, { size: 15 });
+  soundBtn(1222, 12);
+}
+function drawBust() {
+  ctx.drawImage(CARPET, 0, 0); ctx.fillStyle = 'rgba(0,0,0,.7)'; ctx.fillRect(0, 0, W, H);
+  for (let i = 0; i < 18; i++) { const x = (i * 97 + 40) % W, y = ((S.time * (60 + i * 7) + i * 130) % (H + 100)) - 50; drawChip(x, y, 18, DENOMS[i % 6], .35); }
+  ctx.save(); ctx.shadowColor = '#ff2a3a'; ctx.shadowBlur = 30 + Math.sin(S.time * 4) * 10; T('BUSTED', 640, 260, 120, '#ff5a6a', 'center', 'bold', SERIF); ctx.restore();
+  T("You're out of chips.", 640, 360, 28, '#f7efd8', 'center', 'normal', SERIF);
+  T('The house always wins, but it gives second chances.', 640, 400, 20, 'rgba(247,239,216,.75)', 'center', 'italic', SERIF);
+  T('Best bankroll: ' + fmt(S.best), 640, 450, 18, '#e8c14a', 'center', 'bold');
+  button(470, 500, 340, 70, 'START OVER WITH $1,000', restart, { color: '#2f9e55', text: '#fff', size: 21 });
+}
+
+// =====================================================================
+//  MAIN LOOP
+// =====================================================================
+let lastT = performance.now();
+function update(dt) {
+  S.time += dt;
+  if (S.scene === 'game' && S.game && !S.overlay) { S.game.tick(dt); updParts(dt); }
+  for (let i = S.popups.length - 1; i >= 0; i--) { const p = S.popups[i]; p.t += dt; p.y -= 34 * dt; if (p.t > 2) S.popups.splice(i, 1); }
+  if (S.toast) { S.toast.t += dt; if (S.toast.t > 2.8) S.toast = null; }
+  if (S.chips > S.best) S.best = S.chips;
+  if (S.scene === 'game' && S.game && S.chips <= 0 && S.game.onTable() === 0 && !S.game.busy() && S.game.phase !== 'spin' && S.game.phase !== 'fly' && S.game.phase !== 'roll') {
+    S.bustT += dt; if (S.bustT > 2.6) { S.scene = 'bust'; S.game = null; S.overlay = false; S.bustT = 0; Snd.lose(); save(); }
+  } else if (S.scene === 'menu' && S.chips <= 0) { S.scene = 'bust'; }
+  else S.bustT = 0;
+  S.saveT += dt; if (S.saveT > 1) { S.saveT = 0; save(); }
+}
+function render() {
+  ctx.setTransform(K, 0, 0, K, 0, 0); UI.items = []; ctx.textBaseline = 'middle';
+  if (S.scene === 'menu') drawMenu();
+  else if (S.scene === 'intro') drawIntro(S.def, false);
+  else if (S.scene === 'game') { S.game.draw(); if (!(S.game instanceof Slots) && !(S.game instanceof Crash)) drawParts(); drawHUD(); if (S.overlay) drawIntro(S.def, true); }
+  else if (S.scene === 'bust') drawBust();
+  for (const p of S.popups) { ctx.globalAlpha = clamp(2 - p.t, 0, 1); ctx.save(); ctx.shadowColor = '#000'; ctx.shadowBlur = 6; T(p.text, p.x, p.y, 24, p.color, 'center', 'bold'); ctx.restore(); ctx.globalAlpha = 1; }
+  if (S.toast) {
+    const a = clamp((2.8 - S.toast.t) * 3, 0, 1); ctx.globalAlpha = a; ctx.font = 'bold 16px ' + SANS; const w = ctx.measureText(S.toast.text).width + 40;
+    rr(640 - w / 2, 66, w, 38, 19); ctx.fillStyle = 'rgba(10,5,2,.92)'; ctx.fill(); ctx.strokeStyle = '#e8c14a'; ctx.lineWidth = 1.5; ctx.stroke(); T(S.toast.text, 640, 86, 16, '#ffe9a6'); ctx.globalAlpha = 1;
+  }
+  if (S.scene === 'game' && S.game && S.chips <= 0 && S.bustT > 0) T('Out of chips…', 640, 110, 22, '#ff8b8b', 'center', 'bold', SERIF);
+  let hot = false; for (const it of UI.items) if (it.cb && over(it.x, it.y, it.w, it.h) && !(it.x === 0 && it.y === 0 && it.w === W)) { hot = true; break; }
+  cv.style.cursor = hot ? 'pointer' : 'default';
+}
+function frame(now) {
+  const dt = Math.min(.05, (now - lastT) / 1000); lastT = now;
+  try { update(dt); render(); } catch (e) { console.error(e); }
+  requestAnimationFrame(frame);
+}
+addEventListener('beforeunload', save);
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
