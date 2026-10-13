@@ -1,0 +1,1063 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Krillion</title>
+<style>
+/* One full-window canvas. The text input is a transparent overlay so mobile keyboards open; all drawing is on the canvas. */
+:root{--ground:#04142e;color-scheme:dark}
+html,body{margin:0;height:100%;background:var(--ground);overflow:hidden}
+canvas{display:block;position:absolute;left:0;top:0;touch-action:none;-webkit-user-select:none;user-select:none}
+#ans{position:absolute;display:none;opacity:0;border:0;padding:0 12px;font-size:16px;background:transparent;color:transparent;caret-color:transparent;outline:none;z-index:2}
+</style>
+</head>
+<body>
+<canvas id="c" aria-label="Krillion, the daily dive"></canvas>
+<input id="ans" type="text" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" maxlength="40" aria-label="Your answer">
+<script>
+'use strict';
+// =====================================================================
+//  KRILLION  —  the daily dive. Name something; rarer answers dive deeper.
+// =====================================================================
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const inputEl = document.getElementById('ans');
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  W = innerWidth; H = innerHeight; DPR = Math.min(2, window.devicePixelRatio || 1);
+  cv.width = Math.round(W * DPR); cv.height = Math.round(H * DPR);
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  initSnow();
+}
+addEventListener('resize', resize);
+
+// ---------------- utilities ----------------
+const rnd = Math.random;
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const rr = (a, b) => a + rnd() * (b - a);
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+function shuffle(arr, r) {
+  for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(r() * (i + 1)); [arr[i], arr[j]] = [arr[j], arr[i]]; }
+  return arr;
+}
+const fmt = n => Math.round(n).toLocaleString('en-US');
+function lev(a, b) {
+  const m = a.length, n = b.length; let prev = new Array(n + 1), cur = new Array(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  for (let i = 1; i <= m; i++) {
+    cur[0] = i;
+    for (let j = 1; j <= n; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    [prev, cur] = [cur, prev];
+  }
+  return prev[n];
+}
+
+// ---------------- the reef: prompts & answers ----------------
+// Answers are listed most common first. "a/b" are spellings of the same answer.
+const RAW = [
+['food','Name a cheese','cheddar,mozzarella,parmesan/parmigiano/parmigiano reggiano,brie,swiss/emmental/emmentaler,gouda,feta,blue cheese/blue,camembert,provolone,american,pepper jack/monterey jack/jack,ricotta,goat cheese/chevre,cream cheese,gruyere,colby,havarti,manchego,stilton,roquefort,gorgonzola,halloumi,mascarpone,pecorino/pecorino romano,asiago,munster/muenster,edam,paneer,burrata,limburger,raclette,comte,taleggio,reblochon,wensleydale,cotija,queso fresco,red leicester,epoisses,jarlsberg,leerdammer,fontina,caciocavallo,stracchino,lancashire,caerphilly,oaxaca,tilsit,port salut,mimolette,casu marzu'],
+['food','Name a fruit','apple,banana,orange,strawberry,grape,mango,pineapple,watermelon,pear,peach,cherry,blueberry,kiwi/kiwifruit,lemon,raspberry,plum,coconut,lime,grapefruit,papaya,pomegranate,apricot,cantaloupe,honeydew,blackberry,fig,nectarine,passion fruit/passionfruit,dragon fruit/pitaya,lychee/litchi,guava,persimmon,date,tangerine,clementine,cranberry,gooseberry,starfruit/carambola,durian,jackfruit,kumquat,quince,rambutan,mangosteen,elderberry,loquat,feijoa,soursop/guanabana,salak/snake fruit,cherimoya,mulberry,ugli fruit,yuzu,ackee,pawpaw,medlar,longan,tamarillo,jabuticaba'],
+['food','Name a vegetable','carrot,broccoli,potato,lettuce,tomato,spinach,cucumber,onion,celery,corn,peas/pea,green beans/green bean,cauliflower,cabbage,bell pepper/pepper,zucchini/courgette,asparagus,kale,sweet potato,eggplant/aubergine,brussels sprouts/brussels sprout,mushroom,radish,beet/beetroot,squash,garlic,artichoke,leek,turnip,okra,parsnip,bok choy/pak choi,arugula/rocket,chard/swiss chard,fennel,rutabaga/swede,kohlrabi,jicama,celeriac,endive,radicchio,daikon,watercress,salsify,romanesco,fiddlehead,taro,cassava/yuca,samphire,sunchoke/jerusalem artichoke,chayote,burdock,lotus root'],
+['food','Name a pasta shape','spaghetti,penne,macaroni,fettuccine,lasagna/lasagne,linguine,rigatoni,ravioli,fusilli,farfalle/bow tie/bowtie,tortellini,rotini,ziti,angel hair/capellini,orzo,gnocchi,shells/conchiglie,tagliatelle,pappardelle,orecchiette,cannelloni,manicotti,bucatini,ditalini,vermicelli,gemelli,cavatappi,campanelle,radiatori,paccheri,stelline,trofie,casarecce,strozzapreti,mafaldine,cavatelli,anelli,lumache,agnolotti,garganelli,pici,fregola,corzetti,busiate,scialatielli,lorighittas,su filindeu'],
+['food','Name a spice or herb','cinnamon,basil,oregano,black pepper/pepper,paprika,garlic powder,cumin,thyme,rosemary,parsley,ginger,nutmeg,cilantro/coriander,turmeric,chili powder/chili/chilli,mint,dill,sage,bay leaf/bay leaves,cayenne,cloves/clove,curry powder,saffron,cardamom,allspice,chives,tarragon,fennel seed,mustard seed,star anise,marjoram,vanilla,anise/aniseed,sumac,fenugreek,zaatar,lemongrass,sichuan pepper/szechuan pepper,caraway,asafoetida/hing,galangal,mace,juniper,nigella,ajwain,annatto/achiote,epazote,grains of paradise,long pepper,mahleb,amchur,lovage,borage,savory,sassafras/file'],
+['food','Name a type of bread','white bread/white,sourdough,whole wheat/wheat,baguette,rye,bagel,pita,croissant,ciabatta,brioche,naan,tortilla,focaccia,cornbread,multigrain,challah,english muffin,pumpernickel,biscuit,flatbread,roll,banana bread,soda bread,garlic bread,pretzel,matzo/matzah,bun,chapati,roti,lavash,injera,arepa,fougasse,pain de mie,stollen,panettone,bao,paratha,crumpet,bannock,simit,pandesal,lefse,bammy,cozonac,tsoureki,kulich,barmbrack,borodinsky,pogaca'],
+['food','Name a breakfast food','pancakes/pancake,eggs/egg,bacon,cereal,waffles/waffle,toast,oatmeal/porridge,french toast,sausage,yogurt/yoghurt,bagel,omelet/omelette,hash browns/hashbrowns,muffin,granola,croissant,grits,biscuits and gravy,smoothie,crepes/crepe,eggs benedict,breakfast burrito,scrambled eggs,avocado toast,donut/doughnut,cinnamon roll,quiche,shakshuka,huevos rancheros,chilaquiles,congee,full english,kedgeree,muesli,scones/scone,frittata,dosa,idli,poha,menemen,kippers,natto,tamago kake gohan,black pudding,khachapuri,ful medames,pain au chocolat,kaya toast'],
+['food','Name a cocktail','margarita,martini,mojito,cosmopolitan/cosmo,old fashioned,pina colada,manhattan,daiquiri,bloody mary,long island iced tea/long island,whiskey sour,mai tai,moscow mule,negroni,mimosa,gin and tonic,screwdriver,tequila sunrise,white russian,sex on the beach,sangria,aperol spritz/spritz,cuba libre,tom collins,paloma,sidecar,mint julep,caipirinha,espresso martini,dark and stormy,gimlet,french 75,sazerac,pisco sour,hurricane,boulevardier,aviation,last word,bellini,kir royale,zombie,penicillin,corpse reviver,vesper,rusty nail,grasshopper,singapore sling,clover club,ramos gin fizz,bramble,jungle bird,paper plane,hanky panky,brandy alexander,vieux carre'],
+
+['nature','Name a dog breed','labrador/lab/labrador retriever,golden retriever,german shepherd,poodle,bulldog,beagle,chihuahua,husky/siberian husky,pug,rottweiler,dachshund,boxer,corgi,shih tzu,yorkshire terrier/yorkie,great dane,border collie,pit bull/pitbull,doberman,dalmatian,cocker spaniel,australian shepherd,french bulldog/frenchie,goldendoodle,maltese,pomeranian,saint bernard/st bernard,bernese mountain dog,greyhound,jack russell,shiba inu,akita,basset hound,bloodhound,mastiff,newfoundland,samoyed,whippet,schnauzer,weimaraner,vizsla,papillon,bichon frise,collie,irish wolfhound,afghan hound,basenji,chow chow,shar pei,borzoi,saluki,komondor,puli,xoloitzcuintli/xolo,lagotto romagnolo,otterhound,kooikerhondje,bergamasco,azawakh,mudi,stabyhoun,catahoula,norwegian lundehund'],
+['nature','Name a sea creature','shark,whale,dolphin,octopus,jellyfish,starfish/sea star,crab,sea turtle/turtle,seahorse,squid,lobster,clownfish,stingray/ray,seal,shrimp,eel,orca/killer whale,sea urchin,manta ray,clam,oyster,sea lion,walrus,swordfish,tuna,coral,anglerfish,pufferfish/puffer,narwhal,barracuda,manatee,krill,blue whale,hammerhead,sea cucumber,sea anemone/anemone,cuttlefish,nautilus,mussel,moray eel,beluga,lionfish,sea otter,dugong,marlin,plankton,sunfish/mola mola/mola,nudibranch/sea slug,barnacle,vampire squid,blobfish,gulper eel,frilled shark,coelacanth,oarfish,sea pig,giant isopod,yeti crab,dumbo octopus,siphonophore,sea butterfly,pyrosome,goblin shark,sea angel,barreleye'],
+['nature','Name a bird','eagle,robin,cardinal,blue jay,crow,owl,pigeon,sparrow,hawk,parrot,penguin,flamingo,hummingbird,seagull/gull,duck,swan,peacock,ostrich,falcon,woodpecker,pelican,raven,toucan,goose,chicken,turkey,vulture,canary,dove,stork,heron,emu,kingfisher,magpie,finch,starling,albatross,puffin,crane,kiwi,cockatoo,macaw,condor,osprey,loon,nightingale,roadrunner,wren,egret,ibis,kookaburra,cassowary,hoatzin,shoebill,kakapo,lyrebird,bowerbird,potoo,frigatebird,quetzal,secretary bird,oilbird,dodo,tui,kea'],
+['nature','Name a tree','oak,maple,pine,birch,palm,willow,apple,cherry,redwood,elm,cedar,spruce,fir,aspen,sequoia,ash,cypress,dogwood,magnolia,poplar,beech,hickory,walnut,sycamore,eucalyptus,baobab,chestnut,juniper,larch,hemlock,cottonwood,olive,banyan,mahogany,teak,yew,linden/lime,alder,hawthorn,ginkgo,acacia,rowan/mountain ash,hornbeam,jacaranda,catalpa,tamarack,sassafras,bristlecone pine/bristlecone,dragon blood tree/dragons blood tree,monkey puzzle,wollemi pine,kapok/ceiba,quiver tree,bunya,tupelo,osage orange,paulownia'],
+['nature','Name a flower','rose,tulip,daisy,sunflower,lily,orchid,daffodil,carnation,lavender,lilac,hibiscus,poppy,dandelion,peony,violet,marigold,iris,chrysanthemum/mum,hydrangea,lotus,jasmine,geranium,petunia,azalea,zinnia,gardenia,cherry blossom,camellia,begonia,snapdragon,pansy,lily of the valley,forget me not,foxglove,dahlia,gerbera,freesia,bluebell,buttercup,morning glory,anemone,crocus,hyacinth,ranunculus,amaryllis,protea,bird of paradise,edelweiss,rafflesia/corpse flower,titan arum,ghost orchid,hellebore,columbine,larkspur,cosmos,celosia,plumeria/frangipani,bougainvillea,gazania,scabiosa,red hot poker/kniphofia,ixia'],
+['nature','Name an insect','ant,bee,butterfly,fly,mosquito,ladybug/ladybird,beetle,grasshopper,dragonfly,cockroach/roach,moth,cricket,wasp,firefly/lightning bug,termite,praying mantis/mantis,flea,caterpillar,hornet,stick insect/walking stick,gnat,cicada,earwig,louse/lice,weevil,aphid,silverfish,bumblebee,scarab,stink bug,yellowjacket,mayfly,locust,katydid,damselfly,lacewing,horsefly,water strider,dung beetle,leafhopper,thrips,stonefly,caddisfly,scorpionfly,antlion,treehopper,mealybug,boll weevil,cochineal,botfly,snakefly,webspinner,ice crawler'],
+['nature','Name a dinosaur','tyrannosaurus/t rex/trex/tyrannosaurus rex,triceratops,velociraptor/raptor,stegosaurus,brachiosaurus,pterodactyl/pteranodon,diplodocus,spinosaurus,ankylosaurus,brontosaurus,allosaurus,parasaurolophus,iguanodon,dilophosaurus,pachycephalosaurus,apatosaurus,carnotaurus,gallimimus,compsognathus,giganotosaurus,deinonychus,archaeopteryx,mosasaurus,utahraptor,baryonyx,therizinosaurus,oviraptor,microraptor,argentinosaurus,edmontosaurus,styracosaurus,protoceratops,maiasaura,megalosaurus,suchomimus,dreadnoughtus,coelophysis,herrerasaurus,troodon,amargasaurus,kentrosaurus,sinosauropteryx,yutyrannus,nigersaurus,mamenchisaurus,patagotitan,irritator,halszkaraptor,masiakasaurus,quetzalcoatlus,citipati,eoraptor'],
+['nature','Name a weather phenomenon','rain,snow,tornado,hurricane,thunderstorm/thunder,lightning,hail,fog,wind,sleet,blizzard,rainbow,drought,cyclone,typhoon,monsoon,heat wave/heatwave,flood,sunshine/sun,clouds/cloud,drizzle,frost,sandstorm/dust storm,mist,freezing rain,waterspout,aurora/northern lights,dew,haboob,derecho,el nino,microburst,graupel,virga,ball lightning,sundog/sun dog,polar vortex,chinook,diamond dust,fire whirl/firenado,thundersnow,mammatus,haar,sirocco,mistral,fata morgana,brocken spectre,noctilucent clouds,st elmos fire/saint elmos fire,ice storm,whiteout,heat burst'],
+['nature','Name a gemstone','diamond,ruby,emerald,sapphire,amethyst,pearl,opal,topaz,jade,garnet,turquoise,aquamarine,onyx,peridot,citrine,quartz,moonstone,tanzanite,jasper,tourmaline,lapis lazuli/lapis,amber,obsidian,agate,malachite,alexandrite,tigers eye,bloodstone,zircon,spinel,morganite,carnelian,rose quartz,beryl,chrysoberyl,kunzite,iolite,labradorite,rhodochrosite,sunstone,benitoite,painite,taaffeite,grandidierite,red beryl/bixbite,jeremejevite,musgravite,poudretteite,hackmanite,titanite/sphene,demantoid,tsavorite,ammolite,larimar,charoite,sugilite'],
+
+['world','Name a country in Europe','france,germany,italy,spain,england,united kingdom/uk/britain/great britain,ireland,greece,portugal,switzerland,netherlands/holland,sweden,norway,poland,russia,belgium,austria,denmark,finland,ukraine,scotland,iceland,czech republic/czechia,hungary,croatia,romania,turkey/turkiye,wales,serbia,bulgaria,slovakia,slovenia,luxembourg,estonia,latvia,lithuania,belarus,monaco,bosnia/bosnia and herzegovina,albania,montenegro,malta,cyprus,moldova,north macedonia/macedonia,andorra,liechtenstein,san marino,vatican city/vatican/holy see,kosovo'],
+['world','Name a capital city','paris,london,tokyo,washington/washington dc,rome,berlin,madrid,beijing,moscow,ottawa,canberra,cairo,athens,dublin,mexico city,new delhi/delhi,seoul,amsterdam,lisbon,vienna,bangkok,buenos aires,stockholm,oslo,brussels,prague,copenhagen,helsinki,warsaw,budapest,nairobi,brasilia,lima,santiago,bogota,ankara,tehran,jakarta,manila,hanoi,havana,reykjavik,wellington,riyadh,baghdad,kabul,islamabad,kyiv/kiev,caracas,addis ababa,ulaanbaatar,ouagadougou,thimphu,tbilisi,yerevan,bishkek,ashgabat,funafuti,ngerulmud,tegucigalpa,antananarivo,nukualofa,port moresby,vientiane,windhoek,paramaribo'],
+['world','Name a US state','california,texas,florida,new york,alaska,hawaii,washington,ohio,colorado,georgia,arizona,michigan,illinois,nevada,oregon,pennsylvania,virginia,north carolina,tennessee,massachusetts,new jersey,louisiana,utah,kentucky,minnesota,wisconsin,alabama,missouri,maine,indiana,south carolina,oklahoma,montana,kansas,iowa,idaho,mississippi,arkansas,connecticut,maryland,vermont,new mexico,nebraska,wyoming,new hampshire,west virginia,south dakota,north dakota,rhode island,delaware'],
+['world','Name a language','english,spanish,french,mandarin/chinese,german,japanese,italian,arabic,russian,portuguese,hindi,korean,greek,dutch,swedish,latin,hebrew,turkish,polish,vietnamese,cantonese,bengali,urdu,swahili,tagalog/filipino,thai,persian/farsi,norwegian,danish,finnish,irish/gaelic,welsh,punjabi,hungarian,czech,ukrainian,indonesian,malay,tamil,yoruba,zulu,amharic,icelandic,basque,catalan,quechua,navajo,maori,hawaiian,esperanto,tok pisin,xhosa,inuktitut,ainu,cornish,romansh,sami,faroese,occitan,manx,guarani,aymara'],
+['world','Name a mountain','everest,kilimanjaro,fuji/mount fuji,k2,denali/mckinley,mont blanc,matterhorn,rainier,st helens/mount st helens,olympus,aconcagua,elbrus,kosciuszko,vesuvius,etna,whitney,pikes peak,kangchenjunga,annapurna,mount kenya,aoraki/mount cook,eiger,sinai,table mountain,ben nevis,snowdon/yr wyddfa,mount hood,shasta,lhotse,makalu,cho oyu,nanga parbat,ararat,chimborazo,cotopaxi,vinson,mauna kea,mauna loa,popocatepetl,orizaba,logan,kinabalu,ama dablam,siula grande,puncak jaya/carstensz,ojos del salado,huascaran,ruapehu,shishapangma,gasherbrum,robson,stromboli'],
+['world','Name a river','nile,amazon,mississippi,thames,yangtze,danube,seine,rhine,ganges,colorado,hudson,missouri,volga,mekong,ohio,rio grande,euphrates,tigris,zambezi,congo,niger,st lawrence,columbia,yukon,indus,yellow river/huang he,loire,tiber,shannon,potomac,jordan,orinoco,murray,mackenzie,limpopo,elbe,oder,vistula,po,douro,tagus,ebro,dnieper,don,ob,yenisei,lena,amur,irrawaddy,brahmaputra,salween,okavango,parana,uruguay,madeira,snake,tennessee,fraser,liffey,arno,neva,moselle,rhone,garonne,usumacinta,kolyma,purus,jurua,essequibo'],
+['world','Name a famous landmark','eiffel tower,statue of liberty,great wall/great wall of china,taj mahal,pyramids/pyramids of giza/great pyramid,colosseum,big ben,stonehenge,machu picchu,christ the redeemer,mount rushmore,golden gate bridge,leaning tower of pisa/tower of pisa,sydney opera house,grand canyon,niagara falls,petra,acropolis/parthenon,empire state building,burj khalifa,sagrada familia,angkor wat,chichen itza,louvre,buckingham palace,kremlin,neuschwanstein,alhambra,moai/easter island,hagia sophia,forbidden city,tower bridge,brandenburg gate,space needle,cn tower,arc de triomphe,notre dame,victoria falls,uluru/ayers rock,great barrier reef,petronas towers,mont saint michel,versailles,st peters basilica,golden temple,potala palace,borobudur,terracotta army,meteora,bagan,tikal,great zimbabwe,derinkuyu,gobekli tepe,lalibela,persepolis,hallgrimskirkja,stari most/mostar bridge,nazca lines,newgrange,sigiriya'],
+
+['culture','Name a musical instrument','guitar,piano,drums/drum,violin,trumpet,flute,saxophone/sax,cello,clarinet,bass guitar/bass,harp,ukulele,trombone,harmonica,tuba,banjo,keyboard,accordion,xylophone,oboe,french horn/horn,tambourine,triangle,bagpipes/bagpipe,viola,organ,mandolin,recorder,bassoon,cymbals/cymbal,double bass/upright bass,sitar,piccolo,bongos,glockenspiel,marimba,didgeridoo,harpsichord,lute,theremin,kazoo,steel drum/steelpan,timpani,cowbell,castanets,ocarina,lyre,zither,dulcimer,hurdy gurdy,erhu,koto,shamisen,tabla,kalimba/mbira,balalaika,bouzouki,oud,duduk,shakuhachi,handpan/hang drum,celesta,sousaphone,euphonium,contrabassoon,nyckelharpa,ondes martenot,serpent,cimbalom'],
+['culture','Name a sport','soccer/football,basketball,baseball,tennis,golf,hockey/ice hockey,volleyball,swimming,american football,rugby,cricket,boxing,track/athletics/running,badminton,lacrosse,softball,table tennis/ping pong,wrestling,gymnastics,skiing,surfing,bowling,cycling,snowboarding,skateboarding,fencing,water polo,handball,archery,rowing,polo,curling,squash,karate,judo,bobsled/bobsleigh,luge,dodgeball,ultimate frisbee/ultimate,triathlon,darts,snooker,billiards/pool,field hockey,netball,kabaddi,sepak takraw,hurling,bandy,korfball,underwater hockey,jai alai,pesapallo,buzkashi,shinty,quidditch/quadball,chessboxing/chess boxing,canoe polo,sumo'],
+['culture','Name a dance style','ballet,hip hop,salsa,tango,jazz,tap,waltz,ballroom,breakdancing/breaking/breakdance,swing,contemporary,modern,line dancing,square dance,cha cha,foxtrot,flamenco,belly dance/belly dancing,irish dance/irish dancing,disco,samba,rumba,polka,bachata,merengue,twerking/twerk,lindy hop,charleston,quickstep,paso doble,zumba,krump,vogue/voguing,moonwalk,jive,mambo,hula,bollywood,kathak,bharatanatyam,capoeira,clogging,haka,mazurka,lambada,popping,locking,tutting,butoh,kizomba,tinikling,kecak,fandango,bolero,cumbia,zouk,schuhplattler'],
+['culture','Name a Greek god','zeus,poseidon,hades,athena,apollo,aphrodite,ares,hermes,hera,artemis,dionysus,hephaestus,demeter,persephone,eros,kronos/cronus,gaia,nike,hestia,helios,hecate,pan,nemesis,nyx,uranus,selene,eos,iris,hypnos,thanatos,tyche,morpheus,rhea,atlas,prometheus,chaos,eris,boreas,asclepius,hebe,erebus,aether,pontus,tartarus,ananke,chronos,thalassa,hemera,phanes,harmonia,palaemon,pheme,aristaeus,eileithyia,plutus,momus,ponos'],
+['culture','Name a mythical creature','dragon,unicorn,mermaid,phoenix,vampire,werewolf,centaur,pegasus,griffin/gryphon,fairy,minotaur,bigfoot/yeti/sasquatch,loch ness monster/nessie,kraken,medusa,cyclops,hydra,troll,goblin,elf,leprechaun,sphinx,chimera,banshee,gorgon,siren,ghost,zombie,dwarf,ogre,basilisk,cerberus,chupacabra,wendigo,golem,kitsune,genie/djinn/jinn,valkyrie,satyr,harpy,manticore,kelpie,selkie,thunderbird,kappa,nymph,tengu,naga,cockatrice,wyvern,jackalope,bunyip,qilin/kirin,baku,mothman,tarasque,ammit,simurgh,amarok,taniwha,nuckelavee,camazotz,encantado,bake kujira'],
+['culture','Name a Shakespeare play','romeo and juliet,hamlet,macbeth,midsummer nights dream,othello,king lear,tempest,julius caesar,much ado about nothing,twelfth night,merchant of venice,taming of the shrew,as you like it,richard iii/richard the third/richard 3,henry v/henry the fifth/henry 5,antony and cleopatra,comedy of errors,winters tale,measure for measure,coriolanus,titus andronicus,henry iv/henry the fourth/henry 4,richard ii/richard the second/richard 2,alls well that ends well,troilus and cressida,cymbeline,merry wives of windsor,timon of athens,pericles,loves labours lost/loves labors lost,two gentlemen of verona,henry vi/henry the sixth/henry 6,henry viii/henry the eighth/henry 8,king john,two noble kinsmen,edward iii/edward the third/edward 3'],
+['culture','Name a board game','monopoly,chess,scrabble,checkers/draughts,clue/cluedo,sorry,risk,game of life/life,candy land/candyland,catan/settlers of catan,battleship,connect four/connect 4,trivial pursuit,operation,guess who,backgammon,pictionary,mouse trap/mousetrap,snakes and ladders/chutes and ladders,go,yahtzee,jenga,stratego,ticket to ride,mancala,ludo/parcheesi,pandemic,othello/reversi,carcassonne,codenames,trouble,boggle,taboo,mastermind,dominion,azul,wingspan,twilight imperium,gloomhaven,diplomacy,cribbage,agricola,terraforming mars,splendor,hive,shogi,xiangqi,blokus,puerto rico,brass,power grid,tigris and euphrates,hnefatafl,senet,royal game of ur,nine mens morris,pachisi,fox and geese'],
+['culture','Name a card game','poker,solitaire,uno,go fish,blackjack,war,rummy,crazy eights,old maid,spades,hearts,bridge,gin rummy/gin,euchre,slapjack,president,speed,spit,canasta,baccarat,egyptian ratscrew,cheat/bs/i doubt it,pinochle,texas holdem,snap,whist,skat,klondike,spider solitaire,freecell,pyramid,cassino,durak,belote,scopa,briscola,sheepshead,piquet,mus,tarock/tarot,bezique,ecarte,oh hell,kemps,palace,schnapsen,jass,hanafuda,napoleon,cuarenta,truco,tute,chinchon,big two,daifugo,tichu,mao,pishe pasha'],
+
+['science','Name a planet or moon','earth,mars,jupiter,saturn,venus,mercury,neptune,uranus,moon/luna,pluto,europa,titan,io,ganymede,callisto,phobos,deimos,enceladus,triton,charon,ceres,mimas,rhea,iapetus,dione,tethys,miranda,titania,oberon,ariel,eris,umbriel,hyperion,phoebe,makemake,haumea,amalthea,nereid,proteus,himalia,janus,epimetheus,pan,atlas,prometheus,pandora,larissa,thebe,metis,adrastea,naiad,despina,galatea,puck,nix,hydra,kerberos,styx,dysnomia'],
+['science','Name a chemical element','oxygen,hydrogen,carbon,gold,iron,helium,nitrogen,silver,copper,sodium,calcium,zinc,lead,uranium,neon,mercury,aluminum/aluminium,chlorine,potassium,magnesium,platinum,lithium,sulfur/sulphur,tin,titanium,phosphorus,nickel,silicon,plutonium,argon,iodine,cobalt,fluorine,radon,chromium,tungsten,krypton,xenon,boron,manganese,arsenic,radium,cesium/caesium,beryllium,bismuth,antimony,gallium,osmium,iridium,palladium,tellurium,selenium,vanadium,germanium,cadmium,barium,strontium,thorium,europium,neodymium,francium,astatine,promethium,technetium,rhenium,hafnium,ytterbium,dysprosium,praseodymium,lutetium,thulium,holmium,erbium,gadolinium,samarium,terbium,protactinium,neptunium,americium,curium,berkelium,californium,einsteinium,fermium,mendelevium,nobelium,lawrencium,rutherfordium,dubnium,seaborgium,bohrium,hassium,meitnerium,darmstadtium,roentgenium,copernicium,nihonium,flerovium,moscovium,livermorium,tennessine,oganesson'],
+['science','Name a programming language','python,javascript/js,java,c++/cpp,c,c#/c sharp,html,ruby,php,swift,sql,go/golang,rust,kotlin,typescript,r,perl,matlab,scratch,assembly,visual basic/vb,lua,scala,haskell,dart,objective c,fortran,cobol,lisp,pascal,julia,basic,elixir,erlang,clojure,f#/f sharp,ocaml,prolog,groovy,racket,scheme,zig,nim,ada,smalltalk,crystal,elm,apl,forth,idris,agda,simula,algol,befunge,malbolge,piet,factor,rebol,mumps'],
+['science','Name a color','red,blue,green,yellow,purple,orange,pink,black,white,brown,gray/grey,teal,turquoise,magenta,cyan,maroon,navy/navy blue,lavender,indigo,violet,beige,gold,silver,crimson,lime,olive,coral,peach,tan,mint,burgundy,aqua,scarlet,ivory,charcoal,salmon,mauve,periwinkle,chartreuse,fuchsia,ochre,sienna,taupe,vermilion,cerulean,puce,amaranth,celadon,viridian,eggshell,gamboge,heliotrope,smaragdine,fulvous,falu red,glaucous,coquelicot,wenge,zaffre,xanadu,razzmatazz,caput mortuum,mikado yellow'],
+['science','Name a bone in the human body','femur,skull/cranium,rib,tibia,vertebra/vertebrae/spine,humerus,fibula,pelvis,radius,ulna,clavicle/collarbone,patella/kneecap,sternum,scapula/shoulder blade,mandible/jaw/jawbone,coccyx/tailbone,sacrum,tarsals,metatarsals,phalanges/phalanx,carpals,metacarpals,maxilla,hyoid,stapes/stirrup,incus/anvil,malleus/hammer,calcaneus/heel bone,talus,ilium,ischium,pubis,atlas,axis,sphenoid,ethmoid,occipital,parietal,temporal,frontal,zygomatic/cheekbone,lacrimal,vomer,nasal,palatine,scaphoid,lunate,triquetrum,pisiform,trapezium,trapezoid,capitate,hamate,cuboid,navicular,cuneiform'],
+['science','Name a constellation','orion,big dipper,ursa major,little dipper/ursa minor,cassiopeia,scorpius/scorpio,leo,gemini,taurus,cancer,virgo,libra,sagittarius,capricornus/capricorn,aquarius,pisces,aries,andromeda,pegasus,cygnus,draco,lyra,perseus,hercules,canis major,cepheus,aquila,centaurus,crux/southern cross,bootes,auriga,ophiuchus,hydra,corona borealis,lupus,phoenix,carina,vela,puppis,eridanus,monoceros,lepus,columba,delphinus,sagitta,vulpecula,lacerta,camelopardalis,lynx,fornax,sculptor,antlia,pyxis,microscopium,telescopium,norma,circinus,mensa,octans,chamaeleon,volans,pictor,horologium,reticulum,caelum,apus,triangulum australe,musca'],
+['science','Name a unit of measurement','meter/metre,inch,foot/feet,mile,kilogram/kilo,pound,gram,liter/litre,second,centimeter/centimetre,yard,ounce,gallon,kilometer/kilometre,minute,hour,ton/tonne,degree,watt,volt,newton,joule,cup,pint,quart,ampere/amp,kelvin,celsius,fahrenheit,hertz,byte,acre,hectare,calorie,ohm,pascal,mole,candela,teaspoon,tablespoon,light year,decibel,horsepower,knot,fathom,furlong,league,parsec,astronomical unit,carat,stone,bushel,angstrom,tesla,weber,coulomb,farad,henry,siemens,lumen,lux,becquerel,sievert,katal,erg,dyne,barn,smoot,jiffy,firkin,hogshead,cubit,rod/perch,slug,poise'],
+];
+const THEMES = {
+  food:    { name: 'Galley Current', blurb: 'Kitchen & table', icon: '🧀' },
+  nature:  { name: 'Wild Waters', blurb: 'Creatures & growing things', icon: '🐙' },
+  world:   { name: 'Seven Seas', blurb: 'Places on the map', icon: '🗺️' },
+  culture: { name: 'Coral Culture', blurb: 'Arts, games & myths', icon: '🎭' },
+  science: { name: 'Lab Trench', blurb: 'Stars, atoms & numbers', icon: '🔭' },
+};
+
+function norm(s) {
+  s = s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  s = s.replace(/\+/g, 'p').replace(/#/g, ' sharp').replace(/&/g, ' and ').replace(/['’`.]/g, '');
+  s = s.replace(/[^a-z0-9]+/g, ' ').trim().replace(/^(the|a|an) /, '');
+  return s.replace(/ +/g, ' ');
+}
+function sing(s) {
+  if (s.length < 4) return s;
+  if (/ies$/.test(s)) return s.slice(0, -3) + 'y';
+  if (/(ches|shes|xes|sses|oes)$/.test(s)) return s.slice(0, -2);
+  if (/[^s]s$/.test(s)) return s.slice(0, -1);
+  return s;
+}
+function titleCase(s) {
+  return s.replace(/\b([a-z])/g, (m, c) => c.toUpperCase()).replace(/\b(And|Of|The|To|On|In)\b/g, w => w.toLowerCase()).replace(/^./, c => c.toUpperCase());
+}
+
+const CATS = RAW.map((r, idx) => {
+  const answers = [], seen = new Set();
+  for (const item of r[2].split(',')) {
+    const forms = item.split('/').map(x => x.trim()).filter(Boolean);
+    const keys = forms.map(norm);
+    if (keys.some(k => seen.has(k))) continue;
+    keys.forEach(k => seen.add(k));
+    answers.push({ label: titleCase(forms[0]), keys, skeys: keys.map(sing) });
+  }
+  // Fake but stable "share of divers": a Zipf-ish curve over the list order.
+  let sum = 0; const w = answers.map((a, i) => { const v = 1 / Math.pow(i + 1, 1.08); sum += v; return v; });
+  answers.forEach((a, i) => { a.pct = w[i] / sum * 93; a.rank = i; });
+  return { id: idx, theme: r[0], prompt: r[1], answers };
+});
+
+// ---------------- scoring tiers ----------------
+const TIERS = {
+  miss:     { name: 'Washed Out', pts: 0, col: '#8494ab', emo: '⬛' },
+  plankton: { name: 'Plankton', pts: 10, col: '#8fe3ff', emo: '🟦' },
+  clever:   { name: 'Too Clever', pts: 15, col: '#7ef0c2', emo: '🟩' },
+  schooler: { name: 'Schooler', pts: 30, col: '#ffe36e', emo: '🟨' },
+  rare:     { name: 'Rare', pts: 60, col: '#ffad5c', emo: '🟧' },
+  deep:     { name: 'Deep Cut', pts: 85, col: '#ff6f7d', emo: '🟥' },
+  krillion: { name: 'One in a Krillion', pts: 100, col: '#ffb6e6', emo: '🦐' },
+};
+const TIER_ORDER = ['plankton', 'clever', 'schooler', 'rare', 'deep', 'krillion'];
+function tierFor(a, krill) {
+  if (!a) return 'miss';
+  if (a === krill) return 'krillion';
+  if (a.pct >= 7) return 'plankton';
+  if (a.pct >= 4) return 'clever';
+  if (a.pct >= 1.6) return 'schooler';
+  if (a.pct >= 0.7) return 'rare';
+  return 'deep';
+}
+function matchAnswer(cat, input) {
+  const k = norm(input); if (!k) return null;
+  const sk = sing(k);
+  for (const a of cat.answers) if (a.keys.includes(k) || a.skeys.includes(sk)) return a;
+  let best = null, bd = 99;
+  for (const a of cat.answers) for (const key of a.keys) {
+    const tol = key.length >= 9 ? 2 : key.length >= 5 ? 1 : 0;
+    if (!tol || Math.abs(key.length - k.length) > tol) continue;
+    const d = lev(k, key);
+    if (d <= tol && d < bd) { bd = d; best = a; }
+  }
+  return best;
+}
+function pickKrillion(cat, r) {
+  const n = cat.answers.length, from = Math.floor(n * 0.6);
+  return cat.answers[from + Math.floor(r() * (n - from))];
+}
+
+// ---------------- persistence (best-effort) ----------------
+const SAVE_KEY = 'krillion.v1';
+let save = { streak: 0, maxStreak: 0, lastDay: 0, played: 0, best: 0, bestEndless: 0, days: {}, muted: false };
+try { const s = JSON.parse(localStorage.getItem(SAVE_KEY)); if (s && typeof s === 'object') save = Object.assign(save, s); } catch (e) {}
+function persist() { try { localStorage.setItem(SAVE_KEY, JSON.stringify(save)); } catch (e) {} }
+
+const EPOCH = Date.UTC(2025, 0, 1);
+const dayNumber = () => Math.floor((Date.now() - EPOCH) / 86400000) + 1;
+function msToReset() { const d = new Date(); return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) - d.getTime(); }
+
+// ---------------- audio ----------------
+let actx = null;
+function tone(f, dur, type = 'sine', vol = 0.08, delay = 0, slide = 0) {
+  if (save.muted) return;
+  try {
+    if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+    const t0 = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f, t0);
+    if (slide) o.frequency.exponentialRampToValueAtTime(f * slide, t0 + dur);
+    g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.015);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+    o.connect(g); g.connect(actx.destination); o.start(t0); o.stop(t0 + dur + 0.05);
+  } catch (e) {}
+}
+function sfxTier(t) {
+  const lvl = TIER_ORDER.indexOf(t);
+  if (lvl < 0) { tone(220, 0.35, 'triangle', 0.07, 0, 0.6); return; }
+  const base = [330, 392, 440, 523, 587, 659][lvl];
+  for (let i = 0; i <= Math.min(lvl, 4); i++) tone(base * Math.pow(1.26, i), 0.22, 'sine', 0.06, i * 0.07);
+  if (t === 'krillion') for (let i = 0; i < 6; i++) tone(1046 * Math.pow(1.12, i), 0.3, 'triangle', 0.04, 0.4 + i * 0.06);
+}
+const sfxClick = () => tone(660, 0.06, 'square', 0.025);
+
+// ---------------- game state ----------------
+const PROMPTS_PER_DIVE = 7, TIME_LIMIT = 20, M_PER_POINT = 10, ENDLESS_LIVES = 3;
+let scene = 'title';         // title | howto | packs | play | reveal | results
+let overlay = null;          // 'howto' drawn over title
+let game = null;
+let toast = { text: '', t: 0 };
+let camTarget = -150, cam = -150;
+let time = 0;
+
+function newGame(mode, opts = {}) {
+  const day = dayNumber();
+  let list = [], rng;
+  if (mode === 'daily') {
+    rng = mulberry32(day * 9973 + 17);
+    list = shuffle(CATS.map(c => c.id), rng).slice(0, PROMPTS_PER_DIVE);
+  } else if (mode === 'pack') {
+    rng = Math.random;
+    list = shuffle(CATS.filter(c => c.theme === opts.theme).map(c => c.id), rng).slice(0, PROMPTS_PER_DIVE);
+  } else {
+    rng = Math.random;
+    list = shuffle(CATS.map(c => c.id), rng);
+  }
+  const prompts = list.map(id => ({ cat: CATS[id], krill: pickKrillion(CATS[id], rng) }));
+  game = { mode, theme: opts.theme, day, prompts, idx: 0, score: 0, shownScore: 0, rows: [], lives: ENDLESS_LIVES, timeLeft: TIME_LIMIT, rng };
+  camTarget = 0;
+  startPrompt();
+}
+function current() { return game.prompts[game.idx]; }
+function startPrompt() {
+  if (game.mode === 'endless' && game.idx >= game.prompts.length) {
+    // ran through the whole reef: reshuffle another lap
+    const more = shuffle(CATS.map(c => c.id), Math.random).map(id => ({ cat: CATS[id], krill: pickKrillion(CATS[id], Math.random) }));
+    game.prompts.push(...more);
+  }
+  game.timeLeft = TIME_LIMIT;
+  scene = 'play';
+  inputEl.value = '';
+  inputEl.style.display = 'block';
+  layoutInput();
+  try { inputEl.focus({ preventScroll: true }); } catch (e) { inputEl.focus(); }
+}
+function submitAnswer(how) { // how: undefined (typed), 'timeout' or 'pass'
+  if (scene !== 'play') return;
+  const timedOut = !!how, p = current(), raw = timedOut ? '' : inputEl.value.trim();
+  if (!timedOut && !raw) { shake = 0.35; tone(180, 0.08, 'square', 0.03); return; }
+  const a = matchAnswer(p.cat, raw);
+  const tier = tierFor(a, p.krill);
+  const pts = TIERS[tier].pts;
+  const row = { prompt: p.cat.prompt, cat: p.cat, krill: p.krill, input: raw, ans: a, tier, pts, timedOut, passed: how === 'pass' };
+  game.rows.push(row);
+  game.score += pts;
+  if (tier === 'miss' && game.mode === 'endless') game.lives--;
+  camTarget = game.score * M_PER_POINT;
+  scene = 'reveal'; revealT = 0;
+  inputEl.blur(); inputEl.style.display = 'none';
+  sfxTier(tier);
+  burst(tier);
+}
+function nextPrompt() {
+  if (scene !== 'reveal') return;
+  sfxClick();
+  game.idx++;
+  const over = game.mode === 'endless' ? game.lives <= 0 : game.idx >= game.prompts.length;
+  if (over) finishGame(); else startPrompt();
+}
+function finishGame() {
+  scene = 'results'; resultsT = 0;
+  if (game.mode === 'daily') {
+    const d = game.day;
+    if (!save.days[d]) {
+      save.days[d] = { score: game.score, rows: game.rows.map(r => ({ p: r.prompt, a: r.ans ? r.ans.label : r.input, t: r.tier, pts: r.pts })) };
+      save.played++;
+      save.streak = save.lastDay === d - 1 ? save.streak + 1 : 1;
+      save.maxStreak = Math.max(save.maxStreak, save.streak);
+      save.lastDay = d;
+      save.best = Math.max(save.best, game.score * M_PER_POINT);
+    }
+  } else if (game.mode === 'endless') {
+    game.newBest = game.score * M_PER_POINT > save.bestEndless;
+    save.bestEndless = Math.max(save.bestEndless, game.score * M_PER_POINT);
+  }
+  persist();
+  tone(523, 0.2, 'sine', 0.06); tone(659, 0.2, 'sine', 0.06, 0.12); tone(784, 0.4, 'sine', 0.06, 0.24);
+}
+function goHome() {
+  scene = 'title'; overlay = null; game = null; camTarget = -150;
+  inputEl.blur(); inputEl.style.display = 'none';
+}
+function viewTodayResults() {
+  const d = dayNumber(), rec = save.days[d]; if (!rec) return;
+  game = { mode: 'daily', day: d, score: rec.score, shownScore: rec.score, prompts: [], idx: 0, lives: 0, fromSave: true,
+    rows: rec.rows.map(r => ({ prompt: r.p, input: r.a, ans: r.t === 'miss' ? null : { label: r.a }, tier: r.t, pts: r.pts })) };
+  camTarget = rec.score * M_PER_POINT;
+  scene = 'results'; resultsT = 0;
+}
+function shareText() {
+  const g = game, depth = g.score * M_PER_POINT;
+  const head = g.mode === 'daily' ? `Krillion 🦐 Daily Dive #${g.day}` : g.mode === 'pack' ? `Krillion 🦐 ${THEMES[g.theme].name} pack` : `Krillion 🦐 Endless Dive`;
+  const grid = g.rows.map(r => TIERS[r.tier].emo).join('');
+  return `${head}\n🌊 ${fmt(depth)} m · ${zoneAt(depth).name}\n${grid}  ${g.score} pts\nRarer answers dive deeper.`;
+}
+function share() {
+  const text = shareText();
+  const done = () => showToast('Copied to clipboard!');
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); done();
+    } catch (e) { showToast('Could not copy'); }
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, fallback); else fallback();
+}
+function showToast(t) { toast.text = t; toast.t = 2.2; }
+
+// ---------------- ocean zones & colors ----------------
+const ZONES = [
+  { from: -1e9, name: 'The Surface' },
+  { from: 1, name: 'Sunlight Zone' },
+  { from: 200, name: 'Twilight Zone' },
+  { from: 1000, name: 'Midnight Zone' },
+  { from: 4000, name: 'Abyssal Zone' },
+  { from: 6000, name: 'Hadal Zone' },
+];
+function zoneAt(d) { let z = ZONES[0]; for (const q of ZONES) if (d >= q.from) z = q; return z; }
+const DEPTH_COLS = [[-200, [120, 205, 240]], [0, [44, 168, 214]], [150, [20, 120, 176]], [500, [12, 74, 128]], [1200, [8, 40, 79]], [3000, [4, 20, 46]], [6000, [2, 8, 22]], [12000, [1, 2, 8]]];
+function depthColor(d) {
+  if (d <= DEPTH_COLS[0][0]) return DEPTH_COLS[0][1];
+  for (let i = 1; i < DEPTH_COLS.length; i++) {
+    const [d1, c1] = DEPTH_COLS[i];
+    if (d <= d1) {
+      const [d0, c0] = DEPTH_COLS[i - 1], t = (d - d0) / (d1 - d0);
+      return [lerp(c0[0], c1[0], t), lerp(c0[1], c1[1], t), lerp(c0[2], c1[2], t)];
+    }
+  }
+  return DEPTH_COLS[DEPTH_COLS.length - 1][1];
+}
+const rgb = (c, a = 1) => `rgba(${c[0] | 0},${c[1] | 0},${c[2] | 0},${a})`;
+
+// ---------------- world: camera, particles, creatures ----------------
+const SCALE = 0.55; // px per metre
+const playerY = () => Math.max(84, H * 0.2);
+const depthToY = d => playerY() + (d - cam) * SCALE;
+let snow = [];
+function initSnow() {
+  const n = Math.round(clamp(W * H / 9000, 40, 160));
+  snow = Array.from({ length: n }, () => ({ x: rnd() * W, y: rnd() * H, z: rr(0.2, 1), r: rr(0.6, 2) }));
+}
+let creatures = [], spawnedTo = 0, spawnedFrom = 0, worldInit = false;
+const KINDS = {
+  sun: ['school', 'school', 'fish', 'fish', 'turtle', 'ray', 'jelly', 'whale'],
+  twi: ['jelly', 'squid', 'lantern', 'lantern', 'fishSilver', 'jelly'],
+  mid: ['angler', 'lantern', 'jellyGlow', 'gulper', 'squid', 'siphon'],
+  aby: ['glowSpark', 'angler', 'jellyGlow', 'siphon', 'glowSpark'],
+  had: ['glowSpark', 'siphon', 'snailfish', 'snailfish'],
+};
+function spawnAt(d) {
+  if (d < 25) return;
+  const z = d < 200 ? 'sun' : d < 1000 ? 'twi' : d < 4000 ? 'mid' : d < 6000 ? 'aby' : 'had';
+  const list = KINDS[z]; let kind = list[Math.floor(rnd() * list.length)];
+  if (kind === 'whale' && rnd() < 0.6) kind = 'fish';
+  const dir = rnd() < 0.5 ? -1 : 1;
+  const c = { kind, d, x: rr(-0.1, 1.1), dir, sp: rr(0.01, 0.035), s: rr(0.8, 1.3), ph: rnd() * 6.28, hue: rnd() };
+  if (kind === 'school') c.n = 5 + Math.floor(rnd() * 6), c.off = Array.from({ length: c.n }, () => [rr(-40, 40), rr(-18, 18), rr(0.7, 1.1)]);
+  if (kind === 'glowSpark') c.pts = Array.from({ length: 6 + Math.floor(rnd() * 6) }, () => [rr(-30, 30), rr(-30, 30), rnd() * 6.28]);
+  creatures.push(c);
+}
+function updateWorld(dt) {
+  const prevCam = cam;
+  const k = scene === 'title' ? 1.2 : 1.6;
+  cam += (camTarget - cam) * Math.min(1, dt * k);
+  if (Math.abs(camTarget - cam) < 0.3) cam = camTarget;
+  const dpx = (cam - prevCam) * SCALE;
+  for (const p of snow) {
+    p.y -= dpx * p.z + dt * 6 * p.z; p.x += Math.sin(time * 0.5 + p.y * 0.01) * dt * 4 * p.z;
+    if (p.y < -5) { p.y += H + 10; p.x = rnd() * W; } else if (p.y > H + 5) { p.y -= H + 10; p.x = rnd() * W; }
+    if (p.x < -5) p.x += W + 10; else if (p.x > W + 5) p.x -= W + 10;
+  }
+  const topD = cam - playerY() / SCALE, botD = cam + (H - playerY()) / SCALE;
+  if (!worldInit) { spawnedTo = spawnedFrom = Math.max(0, topD); worldInit = true; }
+  if (spawnedFrom > spawnedTo) spawnedTo = spawnedFrom;
+  while (spawnedTo < botD + 300) { spawnedTo += rr(45, 140); spawnAt(spawnedTo); }
+  while (spawnedFrom > Math.max(0, topD - 300)) { spawnedFrom -= rr(45, 140); spawnAt(spawnedFrom); }
+  creatures = creatures.filter(c => c.d > topD - 500 && c.d < botD + 500);
+  spawnedTo = Math.min(spawnedTo, botD + 500); spawnedFrom = Math.max(spawnedFrom, topD - 500);
+  for (const c of creatures) {
+    c.x += c.dir * c.sp * dt; c.ph += dt;
+    if (c.x > 1.25) c.x = -0.25; else if (c.x < -0.25) c.x = 1.25;
+  }
+  // krill swarm on the title screen
+  for (const b of swarm) {
+    b.a += dt * b.w; const tx = W * 0.5 + Math.cos(b.a) * b.rx, ty = playerY() + 40 + Math.sin(b.a * 1.3) * b.ry;
+    b.x += (tx - b.x) * dt * 1.5; b.y += (ty - b.y) * dt * 1.5;
+  }
+  for (const f of fx) { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += f.g * dt; f.vx *= 0.98; f.life -= dt; }
+  fx = fx.filter(f => f.life > 0);
+  for (const b of bubbles) { b.y -= b.v * dt; b.x += Math.sin(time * 3 + b.y * 0.05) * 0.3; b.life -= dt; }
+  bubbles = bubbles.filter(b => b.life > 0 && b.y > depthToY(0));
+}
+const swarm = Array.from({ length: 18 }, () => ({ x: 0, y: 0, a: rnd() * 6.28, w: rr(0.3, 0.7) * (rnd() < 0.5 ? -1 : 1), rx: rr(40, 170), ry: rr(10, 60), s: rr(0.45, 0.75) }));
+let fx = [], bubbles = [];
+function burst(tier) {
+  const t = TIERS[tier], px = W / 2, py = playerY();
+  const n = tier === 'krillion' ? 90 : tier === 'miss' ? 10 : 18 + TIER_ORDER.indexOf(tier) * 8;
+  for (let i = 0; i < n; i++) {
+    const a = rnd() * 6.28, sp = rr(40, tier === 'krillion' ? 320 : 180);
+    fx.push({ x: px, y: py, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, g: tier === 'miss' ? 60 : -20, life: rr(0.6, 1.5), max: 1.5, col: tier === 'krillion' && rnd() < 0.5 ? '#ffe680' : t.col, r: rr(1.5, 3.5) });
+  }
+}
+
+// ---------------- drawing: background ----------------
+function drawBackground() {
+  const sY = depthToY(0);
+  const topD = cam - playerY() / SCALE, botD = cam + (H - playerY()) / SCALE;
+  const g = ctx.createLinearGradient(0, Math.max(0, sY), 0, H);
+  const d0 = Math.max(0, topD);
+  for (let i = 0; i <= 6; i++) { const t = i / 6; g.addColorStop(t, rgb(depthColor(lerp(d0, Math.max(d0, botD), t)))); }
+  ctx.fillStyle = g; ctx.fillRect(0, Math.max(0, sY), W, H);
+  if (sY > 0) {
+    const sky = ctx.createLinearGradient(0, 0, 0, sY);
+    sky.addColorStop(0, '#5ec2f2'); sky.addColorStop(1, '#d9f3ff');
+    ctx.fillStyle = sky; ctx.fillRect(0, 0, W, sY + 1);
+    // sun & clouds
+    ctx.fillStyle = 'rgba(255,240,190,0.95)'; ctx.beginPath(); ctx.arc(W * 0.8, sY - 70, 26, 0, 7); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for (let i = 0; i < 3; i++) {
+      const cx = ((time * 8 + i * W * 0.4) % (W + 200)) - 100, cy = sY - 40 - i * 22;
+      if (cy < 6) continue;
+      ctx.beginPath(); ctx.ellipse(cx, cy, 34, 9, 0, 0, 7); ctx.ellipse(cx + 20, cy - 6, 20, 9, 0, 0, 7); ctx.fill();
+    }
+    // waves
+    ctx.fillStyle = rgb(depthColor(0));
+    ctx.beginPath(); ctx.moveTo(0, H);
+    for (let x = 0; x <= W + 10; x += 10) ctx.lineTo(x, sY + Math.sin(x * 0.03 + time * 2) * 4 + Math.sin(x * 0.011 - time) * 3);
+    ctx.lineTo(W, H); ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.65)'; ctx.lineWidth = 2; ctx.beginPath();
+    for (let x = 0; x <= W + 10; x += 10) { const y = sY + Math.sin(x * 0.03 + time * 2) * 4 + Math.sin(x * 0.011 - time) * 3; x ? ctx.lineTo(x, y) : ctx.moveTo(x, y); }
+    ctx.stroke();
+  }
+  // god rays
+  const rayA = clamp(1 - cam / 500, 0, 1) * 0.11;
+  if (rayA > 0.005) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 6; i++) {
+      const x = W * (i / 5) + Math.sin(time * 0.3 + i) * 40, top = Math.max(0, sY);
+      const gr = ctx.createLinearGradient(0, top, 0, top + H * 0.9);
+      gr.addColorStop(0, `rgba(200,240,255,${rayA})`); gr.addColorStop(1, 'rgba(200,240,255,0)');
+      ctx.fillStyle = gr; ctx.beginPath();
+      ctx.moveTo(x - 20, top); ctx.lineTo(x + 25, top); ctx.lineTo(x + 140, top + H); ctx.lineTo(x + 40, top + H); ctx.fill();
+    }
+    ctx.restore();
+  }
+}
+function drawSnow() {
+  const sY = depthToY(0);
+  ctx.fillStyle = '#fff';
+  for (const p of snow) {
+    if (p.y < sY + 4) continue;
+    ctx.globalAlpha = 0.12 + p.z * 0.35; ctx.fillRect(p.x, p.y, p.r, p.r);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawDarkness() {
+  const a = clamp((cam - 250) / 2200, 0, 0.82);
+  if (a <= 0) return;
+  const px = W / 2, py = playerY() + 30;
+  const g = ctx.createRadialGradient(px, py, 30, px, py, Math.max(W, H) * 0.42);
+  g.addColorStop(0, `rgba(0,0,0,${a * 0.1})`); g.addColorStop(0.5, `rgba(0,0,0,${a * 0.7})`); g.addColorStop(1, `rgba(0,0,0,${a})`);
+  ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+}
+
+// ---------------- drawing: creatures ----------------
+function shadeFor(d, col) { // darker & bluer with depth
+  const k = clamp(1 - d / 2500, 0.18, 1), base = depthColor(d);
+  return `rgb(${lerp(base[0], col[0], k) | 0},${lerp(base[1], col[1], k) | 0},${lerp(base[2], col[2], k) | 0})`;
+}
+function fish(x, y, len, col, dir, t) {
+  ctx.save(); ctx.translate(x, y); ctx.scale(dir, 1);
+  const wag = Math.sin(t * 9) * 0.25;
+  ctx.fillStyle = col;
+  ctx.beginPath(); ctx.ellipse(0, 0, len * 0.5, len * 0.22, 0, 0, 7); ctx.fill();
+  ctx.save(); ctx.translate(-len * 0.45, 0); ctx.rotate(wag);
+  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(-len * 0.3, -len * 0.2); ctx.lineTo(-len * 0.3, len * 0.2); ctx.fill(); ctx.restore();
+  ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.beginPath(); ctx.arc(len * 0.28, -len * 0.04, Math.max(1, len * 0.05), 0, 7); ctx.fill();
+  ctx.restore();
+}
+function drawCreature(c, glowPass) {
+  const x = c.x * W, y = depthToY(c.d), t = c.ph, s = c.s;
+  if (y < -150 || y > H + 150) return;
+  switch (c.kind) {
+    case 'school':
+      if (glowPass) return;
+      for (const [ox, oy, k] of c.off) fish(x + ox * s + Math.sin(t * 2 + ox) * 3, y + oy * s + Math.cos(t * 1.7 + oy) * 3, 16 * k * s, shadeFor(c.d, [255, 196, 90]), c.dir, t + ox);
+      break;
+    case 'fish': if (!glowPass) fish(x, y, 30 * s, shadeFor(c.d, c.hue < 0.5 ? [255, 120, 80] : [120, 220, 255]), c.dir, t); break;
+    case 'fishSilver': if (!glowPass) fish(x, y, 26 * s, shadeFor(c.d, [190, 210, 230]), c.dir, t); break;
+    case 'whale': {
+      if (glowPass) return;
+      ctx.save(); ctx.translate(x, y); ctx.scale(c.dir * s * 1.6, s * 1.6); ctx.fillStyle = shadeFor(c.d, [40, 70, 110]);
+      ctx.beginPath(); ctx.ellipse(0, 0, 70, 18, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-60, 0); ctx.lineTo(-95, -14 + Math.sin(t) * 5); ctx.lineTo(-90, 2); ctx.lineTo(-95, 16 + Math.sin(t) * 5); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(10, 14, 18, 4, 0.5, 0, 7); ctx.fill();
+      ctx.restore(); break;
+    }
+    case 'turtle': {
+      if (glowPass) return;
+      ctx.save(); ctx.translate(x, y); ctx.scale(c.dir * s, s);
+      const f = Math.sin(t * 2.5) * 0.5; ctx.fillStyle = shadeFor(c.d, [120, 170, 90]);
+      ctx.save(); ctx.rotate(-0.5 + f); ctx.beginPath(); ctx.ellipse(8, -14, 14, 4, 0, 0, 7); ctx.fill(); ctx.restore();
+      ctx.save(); ctx.rotate(0.5 - f); ctx.beginPath(); ctx.ellipse(8, 14, 14, 4, 0, 0, 7); ctx.fill(); ctx.restore();
+      ctx.beginPath(); ctx.ellipse(26, 0, 7, 5, 0, 0, 7); ctx.fill();
+      ctx.fillStyle = shadeFor(c.d, [90, 120, 60]); ctx.beginPath(); ctx.ellipse(0, 0, 20, 13, 0, 0, 7); ctx.fill();
+      ctx.restore(); break;
+    }
+    case 'ray': {
+      if (glowPass) return;
+      ctx.save(); ctx.translate(x, y); ctx.scale(c.dir * s, s); const f = Math.sin(t * 2) * 8;
+      ctx.fillStyle = shadeFor(c.d, [70, 90, 120]);
+      ctx.beginPath(); ctx.moveTo(26, 0); ctx.quadraticCurveTo(0, -30 - f, -14, -34 - f); ctx.quadraticCurveTo(-8, 0, -14, 34 + f); ctx.quadraticCurveTo(0, 30 + f, 26, 0); ctx.fill();
+      ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(-10, 0); ctx.quadraticCurveTo(-35, Math.sin(t * 3) * 6, -55, 0); ctx.stroke();
+      ctx.restore(); break;
+    }
+    case 'jelly': case 'jellyGlow': {
+      const glow = c.kind === 'jellyGlow';
+      if (glowPass !== glow && !(glowPass && c.d > 600)) return;
+      const pulse = 1 + Math.sin(t * 2.4) * 0.12, r = 14 * s;
+      const col = glow ? `hsla(${180 + c.hue * 140},90%,70%,` : 'rgba(255,190,230,';
+      ctx.save(); ctx.translate(x, y + Math.sin(t) * 6);
+      if (glow) { ctx.globalCompositeOperation = 'lighter'; const g = ctx.createRadialGradient(0, 0, 2, 0, 0, r * 3); g.addColorStop(0, col + '0.35)'); g.addColorStop(1, col + '0)'); ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, r * 3, 0, 7); ctx.fill(); }
+      ctx.fillStyle = col + (glow ? '0.55)' : '0.45)');
+      ctx.beginPath(); ctx.ellipse(0, 0, r * pulse, r / pulse, 0, Math.PI, 0); ctx.quadraticCurveTo(0, r * 0.3, -r * pulse, 0); ctx.fill();
+      ctx.strokeStyle = col + '0.45)'; ctx.lineWidth = 1.3;
+      for (let i = -2; i <= 2; i++) {
+        ctx.beginPath(); ctx.moveTo(i * r * 0.35, 2);
+        for (let k = 1; k <= 6; k++) ctx.lineTo(i * r * 0.35 + Math.sin(t * 3 + k + i) * 3, 2 + k * r * 0.45);
+        ctx.stroke();
+      }
+      ctx.restore(); break;
+    }
+    case 'squid': {
+      if (glowPass) return;
+      ctx.save(); ctx.translate(x, y); ctx.rotate(c.dir * Math.PI / 2); ctx.scale(s, s);
+      const p = Math.sin(t * 3); ctx.fillStyle = shadeFor(c.d, [220, 110, 110]);
+      ctx.beginPath(); ctx.moveTo(0, -30); ctx.quadraticCurveTo(12, -10, 8, 8); ctx.lineTo(-8, 8); ctx.quadraticCurveTo(-12, -10, 0, -30); ctx.fill();
+      ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth = 2;
+      for (let i = -3; i <= 3; i++) { ctx.beginPath(); ctx.moveTo(i * 2, 8); ctx.quadraticCurveTo(i * (4 + p * 2), 20, i * (3 + p), 30 + Math.abs(i) * 2); ctx.stroke(); }
+      ctx.restore(); break;
+    }
+    case 'lantern': {
+      if (!glowPass) { fish(x, y, 18 * s, shadeFor(c.d, [100, 120, 150]), c.dir, t); return; }
+      ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(120,230,255,0.9)';
+      for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(x + c.dir * (i * 3.5 - 5) * s, y + 3 * s, 1.3, 0, 7); ctx.fill(); }
+      ctx.restore(); break;
+    }
+    case 'angler': {
+      ctx.save(); ctx.translate(x, y); ctx.scale(c.dir * s, s);
+      const lx = 30, ly = -26 + Math.sin(t * 2) * 3;
+      if (!glowPass) {
+        ctx.fillStyle = '#1a1f2c'; ctx.beginPath(); ctx.ellipse(0, 0, 24, 18, 0, 0, 7); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(-20, 0); ctx.lineTo(-38, -12 + Math.sin(t * 6) * 3); ctx.lineTo(-38, 12 + Math.sin(t * 6) * 3); ctx.fill();
+        ctx.strokeStyle = '#2b3245'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(6, -16); ctx.quadraticCurveTo(20, -36, lx, ly); ctx.stroke();
+        ctx.fillStyle = '#0a0c12'; ctx.beginPath(); ctx.moveTo(24, -2); ctx.lineTo(8, 4); ctx.lineTo(24, 12); ctx.fill();
+        ctx.fillStyle = '#dfe6f0'; for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.moveTo(10 + i * 4, 4); ctx.lineTo(12 + i * 4, 9); ctx.lineTo(14 + i * 4, 4); ctx.fill(); }
+      } else {
+        ctx.globalCompositeOperation = 'lighter';
+        const g = ctx.createRadialGradient(lx, ly, 1, lx, ly, 26); g.addColorStop(0, 'rgba(200,255,220,0.95)'); g.addColorStop(0.2, 'rgba(120,255,200,0.4)'); g.addColorStop(1, 'rgba(120,255,200,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(lx, ly, 26, 0, 7); ctx.fill();
+        ctx.fillStyle = 'rgba(255,240,180,0.5)'; ctx.beginPath(); ctx.arc(8, -5, 2.5, 0, 7); ctx.fill();
+      }
+      ctx.restore(); break;
+    }
+    case 'gulper': {
+      if (glowPass) {
+        ctx.save(); ctx.globalCompositeOperation = 'lighter'; ctx.fillStyle = 'rgba(255,90,150,0.8)';
+        const tx = x - c.dir * 70 * s, ty = y + Math.sin(t * 2 + 3) * 10; ctx.beginPath(); ctx.arc(tx, ty, 3, 0, 7); ctx.fill(); ctx.restore(); return;
+      }
+      ctx.save(); ctx.strokeStyle = '#1b2030'; ctx.lineCap = 'round';
+      ctx.lineWidth = 6 * s; ctx.beginPath(); ctx.moveTo(x, y);
+      for (let i = 1; i <= 14; i++) ctx.lineTo(x - c.dir * i * 5 * s, y + Math.sin(t * 2 + i * 0.4) * 10 * (i / 14));
+      ctx.stroke();
+      ctx.fillStyle = '#1b2030'; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x + c.dir * 26 * s, y - 14 * s); ctx.lineTo(x + c.dir * 24 * s, y + 12 * s); ctx.fill();
+      ctx.restore(); break;
+    }
+    case 'siphon': {
+      if (!glowPass) return;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      for (let i = 0; i < 26; i++) {
+        const px = x + c.dir * i * 7 * s, py = y + Math.sin(t * 1.2 + i * 0.35) * 14 + i * 2;
+        const a = 0.25 + 0.35 * (0.5 + 0.5 * Math.sin(t * 4 - i * 0.6));
+        ctx.fillStyle = `hsla(${190 + c.hue * 80},100%,70%,${a})`; ctx.beginPath(); ctx.arc(px, py, 2.4 * s, 0, 7); ctx.fill();
+      }
+      ctx.restore(); break;
+    }
+    case 'glowSpark': {
+      if (!glowPass) return;
+      ctx.save(); ctx.globalCompositeOperation = 'lighter';
+      for (const [ox, oy, p] of c.pts) {
+        const a = Math.max(0, Math.sin(t * 1.5 + p)) * 0.9;
+        if (a < 0.05) continue;
+        const g = ctx.createRadialGradient(x + ox, y + oy, 0, x + ox, y + oy, 8);
+        g.addColorStop(0, `hsla(${170 + c.hue * 120},100%,75%,${a})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x + ox, y + oy, 8, 0, 7); ctx.fill();
+      }
+      ctx.restore(); break;
+    }
+    case 'snailfish': {
+      if (glowPass) return;
+      ctx.save(); ctx.translate(x, y); ctx.scale(c.dir * s, s); ctx.globalAlpha = 0.85;
+      ctx.fillStyle = 'rgba(240,200,215,0.55)'; ctx.beginPath(); ctx.ellipse(0, 0, 16, 9, 0, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(-12, -4); ctx.quadraticCurveTo(-34, Math.sin(t * 5) * 5, -12, 5); ctx.fill();
+      ctx.fillStyle = 'rgba(30,20,30,0.7)'; ctx.beginPath(); ctx.arc(9, -2, 1.8, 0, 7); ctx.fill();
+      ctx.restore(); break;
+    }
+  }
+}
+
+// ---------------- drawing: the krill ----------------
+function drawKrill(x, y, s, t, lamp, tilt = 0) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(tilt); ctx.scale(s, s);
+  if (lamp > 0.01) {
+    ctx.save(); ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(22, 8, 2, 40, 70, 120);
+    g.addColorStop(0, `rgba(255,240,200,${0.35 * lamp})`); g.addColorStop(1, 'rgba(255,240,200,0)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.moveTo(22, 4); ctx.lineTo(-30, 150); ctx.lineTo(120, 150); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+  // antennae
+  ctx.strokeStyle = 'rgba(255,170,160,0.85)'; ctx.lineWidth = 1.1;
+  for (let i = 0; i < 2; i++) {
+    ctx.beginPath(); ctx.moveTo(18, -3);
+    ctx.bezierCurveTo(34, -14 - i * 6, 46, -10 + Math.sin(t * 3 + i) * 6, 58, -24 - i * 8 + Math.sin(t * 2 + i) * 4); ctx.stroke();
+  }
+  // swimmerets
+  ctx.strokeStyle = 'rgba(255,140,130,0.9)'; ctx.lineWidth = 1.4;
+  for (let i = 0; i < 6; i++) {
+    const lx = 10 - i * 4.6, sw = Math.sin(t * 14 - i * 0.9) * 4;
+    ctx.beginPath(); ctx.moveTo(lx, 4); ctx.lineTo(lx - 2 + sw, 13); ctx.stroke();
+  }
+  // body segments, head to tail
+  const segs = 7;
+  for (let i = segs - 1; i >= 0; i--) {
+    const sx = 16 - i * 5.2, sy = Math.sin(t * 4 - i * 0.6) * (i * 0.25) + i * 0.6;
+    const r = 7 - i * 0.6;
+    const g = ctx.createLinearGradient(sx, sy - r, sx, sy + r);
+    g.addColorStop(0, 'rgba(255,150,130,0.95)'); g.addColorStop(1, 'rgba(255,95,95,0.95)');
+    ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(sx, sy, r * 0.9, r, 0, 0, 7); ctx.fill();
+  }
+  // tail fan
+  const tx = 16 - segs * 5.2, ty = Math.sin(t * 4 - segs * 0.6) * 1.8 + 4;
+  ctx.fillStyle = 'rgba(255,110,105,0.9)';
+  ctx.beginPath(); ctx.moveTo(tx + 4, ty); ctx.lineTo(tx - 8, ty - 6); ctx.lineTo(tx - 9, ty + 1); ctx.lineTo(tx - 7, ty + 7); ctx.fill();
+  // glowing photophores
+  ctx.fillStyle = `rgba(140,230,255,${0.4 + 0.3 * Math.sin(t * 3)})`;
+  for (let i = 0; i < 4; i++) { ctx.beginPath(); ctx.arc(10 - i * 7, 6, 1.1, 0, 7); ctx.fill(); }
+  // eye
+  ctx.fillStyle = '#1a0a10'; ctx.beginPath(); ctx.arc(19, -2, 2.8, 0, 7); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(19.8, -2.8, 0.9, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------- UI primitives ----------------
+const FONT = '"Avenir Next", "Nunito", "Segoe UI", system-ui, -apple-system, sans-serif';
+const font = (px, w = 600) => `${w} ${px}px ${FONT}`;
+let buttons = [], mouse = { x: -1, y: -1 };
+function roundRect(x, y, w, h, r) {
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function panel(x, y, w, h, a = 0.62) {
+  ctx.save();
+  ctx.shadowColor = 'rgba(0,0,0,0.35)'; ctx.shadowBlur = 24; ctx.shadowOffsetY = 8;
+  roundRect(x, y, w, h, 18); ctx.fillStyle = `rgba(6,22,44,${a})`; ctx.fill();
+  ctx.restore();
+  roundRect(x + 0.5, y + 0.5, w - 1, h - 1, 18); ctx.strokeStyle = 'rgba(160,220,255,0.18)'; ctx.lineWidth = 1; ctx.stroke();
+}
+function text(s, x, y, px, col = '#eaf6ff', align = 'center', w = 600, base = 'middle') {
+  ctx.font = font(px, w); ctx.fillStyle = col; ctx.textAlign = align; ctx.textBaseline = base; ctx.fillText(s, x, y);
+}
+function fitText(s, x, y, px, maxW, col, align = 'center', w = 600) {
+  ctx.font = font(px, w); let size = px;
+  while (size > 9 && ctx.measureText(s).width > maxW) { size -= 1; ctx.font = font(size, w); }
+  text(s, x, y, size, col, align, w);
+}
+function wrap(s, maxW, px, w = 600) {
+  ctx.font = font(px, w); const words = s.split(' '), lines = []; let line = '';
+  for (const wd of words) { const t = line ? line + ' ' + wd : wd; if (ctx.measureText(t).width > maxW && line) { lines.push(line); line = wd; } else line = t; }
+  if (line) lines.push(line); return lines;
+}
+function button(label, x, y, w, h, onClick, style = 'primary', enabled = true) {
+  const hover = enabled && mouse.x >= x && mouse.x <= x + w && mouse.y >= y && mouse.y <= y + h;
+  ctx.save();
+  roundRect(x, y, w, h, h / 2);
+  if (style === 'primary') {
+    const g = ctx.createLinearGradient(x, y, x, y + h);
+    g.addColorStop(0, hover ? '#ff9d8a' : '#ff8a78'); g.addColorStop(1, hover ? '#ff6f72' : '#f25c66');
+    ctx.fillStyle = enabled ? g : 'rgba(120,140,160,0.4)'; ctx.fill();
+  } else {
+    ctx.fillStyle = hover ? 'rgba(160,220,255,0.22)' : 'rgba(160,220,255,0.1)'; ctx.fill();
+    ctx.strokeStyle = 'rgba(160,220,255,0.35)'; ctx.lineWidth = 1; ctx.stroke();
+  }
+  ctx.restore();
+  fitText(label, x + w / 2, y + h / 2 + 1, Math.min(18, h * 0.4), w - 20, style === 'primary' ? '#fff' : '#d6efff', 'center', 700);
+  if (enabled) buttons.push({ x, y, w, h, onClick });
+  return hover;
+}
+
+// ---------------- scenes ----------------
+let shake = 0, revealT = 0, resultsT = 0;
+const col = () => Math.min(W - 32, 520);
+
+function drawTitle() {
+  const cx = W / 2, cw = col(), x0 = cx - cw / 2;
+  for (const b of swarm) drawKrill(b.x, b.y, b.s, time + b.a, 0, b.w > 0 ? 0.1 : -0.1);
+  const ty = Math.max(playerY() + 120, H * 0.32);
+  // logo
+  ctx.save(); ctx.shadowColor = 'rgba(255,120,120,0.55)'; ctx.shadowBlur = 24;
+  fitText('KRILLION', cx, ty, Math.min(76, W * 0.16), cw, '#ffe3dc', 'center', 800);
+  ctx.restore();
+  text('the daily dive', cx, ty + Math.min(46, W * 0.1), Math.min(20, W * 0.05), '#a8ddff', 'center', 600);
+  fitText('Name something. The rarer your answer, the deeper you dive.', cx, ty + Math.min(80, W * 0.17), 15, cw, 'rgba(220,240,255,0.8)', 'center', 500);
+
+  const d = dayNumber(), done = !!save.days[d];
+  let by = ty + Math.min(118, W * 0.25); const bh = 52, gap = 12, bw = Math.min(cw, 360), bx = cx - bw / 2;
+  if (!done) button(`Start Daily Dive #${d}`, bx, by, bw, bh, () => { sfxClick(); newGame('daily'); });
+  else button(`Dive #${d} done · ${fmt(save.days[d].score * M_PER_POINT)} m — results`, bx, by, bw, bh, () => { sfxClick(); viewTodayResults(); });
+  by += bh + gap;
+  button('Endless Dive', bx, by, (bw - gap) / 2, 46, () => { sfxClick(); newGame('endless'); }, 'ghost');
+  button('Themed Packs', bx + (bw + gap) / 2, by, (bw - gap) / 2, 46, () => { sfxClick(); scene = 'packs'; }, 'ghost');
+  by += 46 + gap;
+  button('How to play', bx, by, bw, 40, () => { sfxClick(); overlay = 'howto'; }, 'ghost');
+  by += 40 + 26;
+  const stats = [`🔥 Streak ${save.streak}`, `🏆 Best ${fmt(save.best)} m`, `♾️ Endless ${fmt(save.bestEndless)} m`];
+  fitText(stats.join('   ·   '), cx, by, 14, cw, 'rgba(210,235,255,0.75)', 'center', 600);
+  if (done) {
+    const ms = msToReset(), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60, s = Math.floor(ms / 1000) % 60;
+    text(`Next dive in ${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`, cx, by + 24, 13, 'rgba(210,235,255,0.6)', 'center', 500);
+  }
+  if (overlay === 'howto') drawHowTo();
+}
+function drawHowTo() {
+  ctx.fillStyle = 'rgba(0,8,20,0.6)'; ctx.fillRect(0, 0, W, H);
+  buttons = [];
+  const cw = col(), ch = Math.min(H - 40, 500), x = W / 2 - cw / 2, y = H / 2 - ch / 2;
+  panel(x, y, cw, ch, 0.92);
+  let yy = y + 36;
+  text('How to dive', W / 2, yy, 24, '#ffe3dc', 'center', 800); yy += 34;
+  const lines = [
+    `Each day brings ${PROMPTS_PER_DIVE} prompts, the same for everyone.`,
+    `You get ${TIME_LIMIT} seconds per prompt to type one answer.`,
+    'Common answers barely get you wet. Rare ones send you down.',
+    'Every point dives you 10 metres deeper.',
+    'Each prompt hides one secret answer worth 100: One in a Krillion.',
+  ];
+  for (const l of lines) for (const w of wrap(l, cw - 48, 14, 500)) { text(w, W / 2, yy, 14, 'rgba(225,242,255,0.9)', 'center', 500); yy += 20; }
+  yy += 10;
+  const tiers = ['plankton', 'clever', 'schooler', 'rare', 'deep', 'krillion', 'miss'];
+  const rowH = Math.min(30, (y + ch - 90 - yy) / tiers.length);
+  for (const k of tiers) {
+    const t = TIERS[k];
+    roundRect(x + 24, yy - rowH / 2 + 2, cw - 48, rowH - 4, 8); ctx.fillStyle = 'rgba(160,220,255,0.07)'; ctx.fill();
+    text(t.emo, x + 44, yy, 15, '#fff', 'center');
+    text(t.name, x + 64, yy, 15, t.col, 'left', 700);
+    text(k === 'miss' ? 'invalid / timeout' : `${t.pts} pts · ${t.pts * M_PER_POINT} m`, x + cw - 36, yy, 13, 'rgba(220,240,255,0.75)', 'right', 600);
+    yy += rowH;
+  }
+  button('Got it', W / 2 - 80, y + ch - 66, 160, 46, () => { sfxClick(); overlay = null; });
+}
+function drawPacks() {
+  const cx = W / 2, cw = col(), keys = Object.keys(THEMES);
+  const top = Math.max(playerY() + 60, 110);
+  ctx.save(); ctx.shadowColor = 'rgba(0,30,60,0.75)'; ctx.shadowBlur = 10;
+  text('Themed Packs', cx, top, 28, '#ffffff', 'center', 800);
+  text(`${PROMPTS_PER_DIVE} prompts from one current. Unlimited dives.`, cx, top + 30, 14, '#eaf6ff', 'center', 600);
+  ctx.restore();
+  const bh = Math.min(62, (H - top - 150) / keys.length - 10);
+  let y = top + 58;
+  for (const k of keys) {
+    const th = THEMES[k], x = cx - cw / 2;
+    const hover = mouse.x >= x && mouse.x <= x + cw && mouse.y >= y && mouse.y <= y + bh;
+    panel(x, y, cw, bh, hover ? 0.8 : 0.55);
+    text(th.icon, x + 34, y + bh / 2, Math.min(26, bh * 0.45), '#fff');
+    text(th.name, x + 64, y + bh / 2 - (bh > 48 ? 9 : 0), 18, '#eaf6ff', 'left', 700);
+    if (bh > 48) text(th.blurb, x + 64, y + bh / 2 + 12, 13, 'rgba(200,230,255,0.7)', 'left', 500);
+    text('›', x + cw - 26, y + bh / 2, 26, 'rgba(200,230,255,0.7)');
+    buttons.push({ x, y, w: cw, h: bh, onClick: () => { sfxClick(); newGame('pack', { theme: k }); } });
+    y += bh + 10;
+  }
+  button('‹ Back', cx - 70, y + 10, 140, 42, () => { sfxClick(); scene = 'title'; }, 'ghost');
+}
+
+function hud() {
+  const g = game, cw = col(), x0 = W / 2 - cw / 2;
+  const depth = Math.max(0, cam);
+  // left: progress
+  let label;
+  if (g.mode === 'endless') label = `ENDLESS · #${g.idx + 1}`;
+  else label = `${g.mode === 'daily' ? 'DIVE #' + g.day : THEMES[g.theme].name.toUpperCase()} · ${Math.min(g.idx + 1, g.prompts.length)}/${g.prompts.length}`;
+  fitText(label, x0, 26, 13, cw * 0.55, 'rgba(220,240,255,0.85)', 'left', 700);
+  // right: depth
+  text(`${fmt(depth)} m`, x0 + cw, 26, 20, '#ffffff', 'right', 800);
+  text(zoneAt(depth).name, x0 + cw, 46, 11, 'rgba(180,225,255,0.75)', 'right', 600);
+  // pips
+  if (g.mode === 'endless') {
+    for (let i = 0; i < ENDLESS_LIVES; i++) text(i < g.lives ? '🫧' : '·', x0 + 8 + i * 22, 48, 15, i < g.lives ? '#fff' : 'rgba(255,255,255,0.35)', 'center');
+  } else {
+    for (let i = 0; i < g.prompts.length; i++) {
+      const r = g.rows[i], cx = x0 + 6 + i * 18;
+      ctx.beginPath(); ctx.arc(cx, 48, 5, 0, 7);
+      ctx.fillStyle = r ? TIERS[r.tier].col : i === g.idx ? 'rgba(255,255,255,0.55)' : 'rgba(255,255,255,0.15)'; ctx.fill();
+    }
+  }
+}
+let inputBox = { x: 0, y: 0, w: 0, h: 0 };
+function layoutInput() {
+  inputEl.style.left = inputBox.x + 'px'; inputEl.style.top = inputBox.y + 'px';
+  inputEl.style.width = inputBox.w + 'px'; inputEl.style.height = inputBox.h + 'px';
+}
+function promptCardGeom(h) {
+  const cw = col(), x = W / 2 - cw / 2;
+  const y = clamp(playerY() + 80, 120, Math.max(120, H - h - 16));
+  return { x, y, w: cw, h };
+}
+function drawPlay(dt) {
+  const g = game, p = current();
+  if (!(overlay === 'pause')) g.timeLeft -= dt;
+  if (g.timeLeft <= 0) { g.timeLeft = 0; submitAnswer('timeout'); return; }
+  const lines = wrap(p.cat.prompt, col() - 48, 30, 800);
+  const ch = 222 + lines.length * 36;
+  const { x, y, w, h } = promptCardGeom(ch);
+  const sx = shake > 0 ? Math.sin(time * 70) * shake * 18 : 0;
+  ctx.save(); ctx.translate(sx, 0);
+  panel(x, y, w, h);
+  text(`PROMPT ${g.idx + 1}`, x + 24, y + 28, 12, 'rgba(160,220,255,0.75)', 'left', 700);
+  const th = THEMES[p.cat.theme]; text(`${th.icon} ${th.name}`, x + w - 24, y + 28, 12, 'rgba(160,220,255,0.6)', 'right', 600);
+  let yy = y + 66;
+  for (const l of lines) { text(l, W / 2, yy, 30, '#ffffff', 'center', 800); yy += 36; }
+  yy += 4;
+  // timer bar
+  const frac = g.timeLeft / TIME_LIMIT, barW = w - 48;
+  roundRect(x + 24, yy, barW, 8, 4); ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+  roundRect(x + 24, yy, Math.max(8, barW * frac), 8, 4);
+  ctx.fillStyle = frac > 0.5 ? '#6fe3ff' : frac > 0.25 ? '#ffd36e' : '#ff6f7d'; ctx.fill();
+  text(`${Math.ceil(g.timeLeft)}s`, x + w - 24, yy + 22, 12, frac > 0.25 ? 'rgba(220,240,255,0.7)' : '#ff8f99', 'right', 700);
+  if (frac < 0.25 && Math.floor(g.timeLeft * 2) !== Math.floor((g.timeLeft + dt) * 2)) tone(880, 0.05, 'square', 0.02);
+  yy += 34;
+  // input box
+  inputBox = { x: x + 24 + sx, y: yy, w: w - 48 - 110, h: 50 };
+  roundRect(x + 24, yy, inputBox.w, 50, 12);
+  ctx.fillStyle = 'rgba(0,10,25,0.55)'; ctx.fill();
+  const focused = document.activeElement === inputEl;
+  ctx.strokeStyle = focused ? 'rgba(111,227,255,0.8)' : 'rgba(160,220,255,0.3)'; ctx.lineWidth = focused ? 2 : 1; ctx.stroke();
+  const val = inputEl.value;
+  ctx.save(); roundRect(x + 24, yy, inputBox.w, 50, 12); ctx.clip();
+  ctx.font = font(20, 600);
+  const tw = ctx.measureText(val).width, maxTw = inputBox.w - 30, offX = Math.min(0, maxTw - tw);
+  if (val) text(val, x + 38 + offX, yy + 26, 20, '#fff', 'left', 600);
+  else text(focused ? '' : 'Tap here and type…', x + 38, yy + 26, 17, 'rgba(200,230,255,0.4)', 'left', 500);
+  if (focused && Math.floor(time * 2) % 2 === 0) {
+    let cx = x + 38 + offX + tw;
+    if (inputEl.selectionStart != null && inputEl.selectionStart < val.length) { ctx.font = font(20, 600); cx = x + 38 + offX + ctx.measureText(val.slice(0, inputEl.selectionStart)).width; }
+    ctx.fillStyle = '#6fe3ff'; ctx.fillRect(cx + 1, yy + 13, 2, 26);
+  }
+  ctx.restore();
+  button('Dive ▾', x + w - 24 - 100, yy, 100, 50, () => submitAnswer());
+  yy += 64;
+  button('Pass', x + 24, yy, 90, 34, () => submitAnswer('pass'), 'ghost');
+  text('Enter to dive', x + w - 24, yy + 17, 12, 'rgba(200,230,255,0.5)', 'right', 500);
+  ctx.restore();
+  layoutInput();
+}
+function drawReveal(dt) {
+  const g = game, r = g.rows[g.rows.length - 1], t = TIERS[r.tier];
+  revealT += dt;
+  const cw = col(), x = W / 2 - cw / 2;
+  const isLast = g.mode === 'endless' ? g.lives <= 0 : g.idx + 1 >= g.prompts.length;
+  const ch = 300;
+  const { y } = promptCardGeom(ch);
+  panel(x, y, cw, ch);
+  fitText(r.prompt, W / 2, y + 26, 13, cw - 48, 'rgba(160,220,255,0.75)', 'center', 700);
+  // tier stamp
+  const pop = 1 + Math.max(0, 0.35 - revealT) * 1.6;
+  ctx.save(); ctx.translate(W / 2, y + 66); ctx.scale(pop, pop);
+  if (r.tier === 'krillion') { ctx.shadowColor = '#ffb6e6'; ctx.shadowBlur = 20 + Math.sin(time * 6) * 8; }
+  fitText(`${t.emo} ${t.name}`, 0, 0, 32, cw - 40, t.col, 'center', 800);
+  ctx.restore();
+  const shown = Math.min(t.pts, Math.floor(revealT * 160));
+  text(r.tier === 'miss' ? (r.passed ? 'Passed' : r.timedOut ? 'Out of air!' : 'Not on our reef') : `+${shown} pts  ·  ${shown * M_PER_POINT} m deeper`, W / 2, y + 104, 16, '#fff', 'center', 700);
+  let yy = y + 138;
+  if (r.ans) {
+    const pct = r.tier === 'krillion' ? 'only you and a handful of divers' : `${r.ans.pct < 1 ? r.ans.pct.toFixed(1) : Math.round(r.ans.pct)}% of divers said this`;
+    fitText(`“${r.ans.label}” — ${pct}`, W / 2, yy, 15, cw - 48, 'rgba(230,245,255,0.92)', 'center', 600);
+  } else if (r.input) {
+    fitText(`“${r.input}” isn't on our list for this prompt.`, W / 2, yy, 15, cw - 48, 'rgba(230,245,255,0.8)', 'center', 500);
+  } else fitText(r.passed ? 'You let this one drift by.' : 'The clock ran out before you answered.', W / 2, yy, 15, cw - 48, 'rgba(230,245,255,0.8)', 'center', 500);
+  yy += 30;
+  const top3 = r.cat.answers.slice(0, 3).map(a => `${a.label} ${Math.round(a.pct)}%`).join(' · ');
+  fitText(`Most common: ${top3}`, W / 2, yy, 13, cw - 48, 'rgba(180,220,255,0.7)', 'center', 500);
+  yy += 24;
+  if (r.tier !== 'krillion') fitText(`One in a Krillion was: ${r.krill.label} 🦐`, W / 2, yy, 13, cw - 48, '#ffcdee', 'center', 600);
+  else fitText('You found the secret answer!', W / 2, yy, 13, cw - 48, '#ffcdee', 'center', 700);
+  const label = isLast ? 'Surface results ▸' : 'Keep diving ▾';
+  button(label, W / 2 - 110, y + ch - 70, 220, 50, nextPrompt);
+  if (g.mode === 'endless' && r.tier === 'miss') text(g.lives > 0 ? `${g.lives} air bubble${g.lives === 1 ? '' : 's'} left` : 'Out of air bubbles', W / 2, y + ch - 10, 12, '#ff9aa6', 'center', 600);
+}
+function drawResults(dt) {
+  const g = game; resultsT += dt;
+  const cw = col(), x = W / 2 - cw / 2;
+  const depth = g.score * M_PER_POINT;
+  const rows = g.rows.slice(-8), extra = g.rows.length - rows.length;
+  const rowH = 30;
+  const ch = Math.min(H - 24, 196 + rows.length * rowH + (extra ? 16 : 0) + 84);
+  const y = clamp(playerY() + 70, 12, Math.max(12, H - ch - 12));
+  panel(x, y, cw, ch, 0.75);
+  const title = g.mode === 'daily' ? `Daily Dive #${g.day}` : g.mode === 'pack' ? `${THEMES[g.theme].name} Pack` : 'Endless Dive';
+  text(title, W / 2, y + 28, 14, 'rgba(160,220,255,0.8)', 'center', 700);
+  const shownD = Math.min(depth, Math.floor(resultsT * Math.max(1500, depth * 0.9)));
+  text(`${fmt(shownD)} m`, W / 2, y + 72, 46, '#ffffff', 'center', 800);
+  text(`${zoneAt(depth).name} · ${g.score} pts`, W / 2, y + 108, 15, '#a8ddff', 'center', 600);
+  if (g.mode === 'endless' && g.newBest) text('New endless record!', W / 2, y + 130, 13, '#ffe36e', 'center', 700);
+  text(g.rows.map(r => TIERS[r.tier].emo).join(' '), W / 2, y + 156, 18, '#fff', 'center');
+  let yy = y + 190;
+  if (extra) { text(`…${extra} earlier prompt${extra === 1 ? '' : 's'}`, W / 2, yy - 4, 12, 'rgba(200,230,255,0.5)', 'center', 500); yy += 16; }
+  for (const r of rows) {
+    roundRect(x + 18, yy - rowH / 2 + 2, cw - 36, rowH - 4, 8); ctx.fillStyle = 'rgba(160,220,255,0.06)'; ctx.fill();
+    const t = TIERS[r.tier];
+    fitText(r.prompt.replace(/^Name (a|an) /, ''), x + 30, yy, 13, cw * 0.36, 'rgba(200,230,255,0.75)', 'left', 600);
+    fitText(r.ans ? r.ans.label : (r.input || '—'), x + 30 + cw * 0.38, yy, 14, cw * 0.36, r.ans ? '#fff' : 'rgba(255,255,255,0.45)', 'left', 700);
+    text(String(r.pts), x + cw - 30, yy, 14, t.col, 'right', 800);
+    yy += rowH;
+  }
+  yy = y + ch - 66;
+  const bw = (cw - 48 - 12) / 2;
+  button('Share 🦐', x + 24, yy, bw, 48, () => { sfxClick(); share(); });
+  if (g.mode === 'daily') button('Home', x + 36 + bw, yy, bw, 48, () => { sfxClick(); goHome(); }, 'ghost');
+  else button('Dive again', x + 36 + bw, yy, bw, 48, () => { sfxClick(); newGame(g.mode, { theme: g.theme }); }, 'ghost');
+  if (g.mode !== 'daily') { button('Home', x + cw - 74, y + 12, 58, 30, () => { sfxClick(); goHome(); }, 'ghost'); }
+  else {
+    const ms = msToReset(), h = Math.floor(ms / 3600000), m = Math.floor(ms / 60000) % 60;
+    text(`🔥 ${save.streak} day streak · next dive in ${h}h ${m}m`, W / 2, y + ch - 8 - 2, 11, 'rgba(200,230,255,0.6)', 'center', 500, 'bottom');
+  }
+}
+function drawDepthGauge() {
+  if (scene === 'title' || scene === 'packs') return;
+  const gx = W - 10, gy0 = 70, gy1 = H - 30, max = 7000;
+  if (W < 420) return;
+  ctx.fillStyle = 'rgba(255,255,255,0.08)'; ctx.fillRect(gx - 2, gy0, 3, gy1 - gy0);
+  for (const z of ZONES.slice(2)) {
+    const yy = gy0 + (z.from / max) * (gy1 - gy0);
+    ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.fillRect(gx - 6, yy, 8, 1);
+  }
+  const yy = gy0 + clamp(Math.max(0, cam) / max, 0, 1) * (gy1 - gy0);
+  ctx.fillStyle = '#ff8a78'; ctx.beginPath(); ctx.moveTo(gx - 3, yy); ctx.lineTo(gx - 11, yy - 5); ctx.lineTo(gx - 11, yy + 5); ctx.fill();
+}
+function drawMute() {
+  const s = 34, x = W - s - 12, y = H - s - 12;
+  roundRect(x, y, s, s, s / 2); ctx.fillStyle = 'rgba(160,220,255,0.12)'; ctx.fill();
+  text(save.muted ? '🔇' : '🔊', x + s / 2, y + s / 2 + 1, 15, '#fff');
+  buttons.push({ x, y, w: s, h: s, onClick: () => { save.muted = !save.muted; persist(); if (!save.muted) sfxClick(); } });
+}
+
+// ---------------- main loop ----------------
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now; time += dt;
+  shake = Math.max(0, shake - dt);
+  updateWorld(dt);
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  buttons = [];
+  drawBackground();
+  for (const c of creatures) drawCreature(c, false);
+  drawDarkness();
+  for (const c of creatures) drawCreature(c, true);
+  drawSnow();
+  // the player krill (and a little bubble trail while descending)
+  if (scene !== 'title' && scene !== 'packs') {
+    const desc = camTarget - cam;
+    if (desc > 5 && rnd() < dt * 14) bubbles.push({ x: W / 2 + rr(-8, 8), y: playerY() + 2, v: rr(40, 90), r: rr(1.5, 4), life: 3 });
+    const lamp = clamp((cam - 300) / 1200, 0, 1);
+    drawKrill(W / 2, playerY() + Math.sin(time * 1.6) * 4, 1.35, time, lamp, clamp(desc * 0.002, 0, 0.6));
+  }
+  ctx.strokeStyle = 'rgba(220,245,255,0.6)'; ctx.lineWidth = 1;
+  for (const b of bubbles) { ctx.beginPath(); ctx.arc(b.x, b.y, b.r, 0, 7); ctx.stroke(); }
+  ctx.save(); ctx.globalCompositeOperation = 'lighter';
+  for (const f of fx) { ctx.globalAlpha = clamp(f.life / f.max, 0, 1); ctx.fillStyle = f.col; ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, 7); ctx.fill(); }
+  ctx.restore(); ctx.globalAlpha = 1;
+  drawDepthGauge();
+
+  if (scene === 'title') drawTitle();
+  else if (scene === 'packs') drawPacks();
+  else if (scene === 'play') { hud(); drawPlay(dt); }
+  else if (scene === 'reveal') { hud(); drawReveal(dt); }
+  else if (scene === 'results') drawResults(dt);
+  if (overlay !== 'howto') drawMute();
+
+  if (toast.t > 0) {
+    toast.t -= dt; ctx.globalAlpha = clamp(toast.t * 2, 0, 1);
+    ctx.font = font(14, 700); const tw = ctx.measureText(toast.text).width + 36;
+    roundRect(W / 2 - tw / 2, H - 70, tw, 38, 19); ctx.fillStyle = 'rgba(6,22,44,0.92)'; ctx.fill();
+    text(toast.text, W / 2, H - 50, 14, '#fff', 'center', 700); ctx.globalAlpha = 1;
+  }
+  canvasCursor();
+  requestAnimationFrame(frame);
+}
+function canvasCursor() {
+  const over = buttons.some(b => mouse.x >= b.x && mouse.x <= b.x + b.w && mouse.y >= b.y && mouse.y <= b.y + b.h);
+  cv.style.cursor = over ? 'pointer' : 'default';
+}
+
+// ---------------- input ----------------
+function hit(x, y) {
+  for (let i = buttons.length - 1; i >= 0; i--) { const b = buttons[i]; if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b; }
+  return null;
+}
+cv.addEventListener('pointermove', e => { mouse.x = e.clientX; mouse.y = e.clientY; });
+cv.addEventListener('pointerleave', () => { mouse.x = mouse.y = -1; });
+cv.addEventListener('pointerdown', e => {
+  mouse.x = e.clientX; mouse.y = e.clientY;
+  const b = hit(e.clientX, e.clientY);
+  if (b) { e.preventDefault(); b.onClick(); }
+  else if (scene === 'play') { try { inputEl.focus({ preventScroll: true }); } catch (er) {} }
+});
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (!e.repeat) submitAnswer(); }
+  if (e.key === 'Escape') { inputEl.blur(); }
+});
+addEventListener('keydown', e => {
+  if (e.target === inputEl || e.repeat) return;
+  if (e.key === 'Enter' || e.key === ' ') {
+    if (scene === 'reveal') { e.preventDefault(); nextPrompt(); }
+    else if (scene === 'play') { e.preventDefault(); inputEl.focus(); }
+    else if (scene === 'title' && overlay === 'howto') { overlay = null; }
+    else if (scene === 'title' && !save.days[dayNumber()]) { sfxClick(); newGame('daily'); }
+  } else if (e.key === 'Escape') {
+    if (overlay) overlay = null; else if (scene === 'packs') scene = 'title';
+  } else if (scene === 'play' && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+    inputEl.focus(); // typed while unfocused: steer the keystroke into the box
+  }
+});
+
+resize();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
