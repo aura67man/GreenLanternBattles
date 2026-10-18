@@ -134,7 +134,7 @@
     </div>
     <div class="panel">
       <h2>PROTOCOLS</h2>
-      <div class="toggle"><span>Wake word "Jarvis"</span><input type="checkbox" id="optWake"></div>
+      <div class="toggle mic-only"><span>Wake word "Jarvis"</span><input type="checkbox" id="optWake"></div>
       <div class="toggle"><span>Voice replies</span><input type="checkbox" id="optVoice" checked></div>
       <button class="btn" id="btnSettings" style="width:100%;margin-top:8px">AI CORE SETTINGS</button>
     </div>
@@ -163,7 +163,7 @@
   </section>
 
   <footer>
-    <button class="btn" id="btnMic" title="Talk (or press Space when not typing)">🎙 MIC</button>
+    <button class="btn mic-only" id="btnMic" title="Talk (or press Space when not typing)">🎙 MIC</button>
     <input id="input" placeholder="Speak to me, sir..." autocomplete="off">
     <button class="btn" id="btnSend">SEND</button>
   </footer>
@@ -171,17 +171,17 @@
 
 <dialog id="settings">
   <h2 style="color:var(--cyan);letter-spacing:3px;font-size:14px;margin-top:0">AI CORE SETTINGS</h2>
-  <p>Without a key, J.A.R.V.I.S. runs on local protocols: time, date, weather, timers, reminders, notes, maths, web search, and a few suit routines.
+  <p class="key-only">Without a key, J.A.R.V.I.S. runs on local protocols: time, date, weather, timers, reminders, notes, maths, web search, and a few suit routines.
   Add an Anthropic API key to give him a real brain for open conversation. The key is kept only in this browser's local storage and is sent only to api.anthropic.com.
   Anyone with access to this browser can read it, so don't use this on a shared computer.</p>
-  <label for="keyIn">Anthropic API key</label>
-  <input id="keyIn" type="password" placeholder="sk-ant-..." autocomplete="off">
+  <label class="key-only" for="keyIn">Anthropic API key</label>
+  <input class="key-only" id="keyIn" type="password" placeholder="sk-ant-..." autocomplete="off">
   <label for="nameIn">What should I call you?</label>
   <input id="nameIn" placeholder="sir">
   <label for="voiceSel">Voice</label>
   <select id="voiceSel"></select>
   <div class="row">
-    <button class="btn" id="btnClearKey">FORGET KEY</button>
+    <button class="btn key-only" id="btnClearKey">FORGET KEY</button>
     <button class="btn" id="btnCloseSettings">CLOSE</button>
     <button class="btn on" id="btnSaveSettings">SAVE</button>
   </div>
@@ -209,6 +209,10 @@
   let notes = store.get("notes", []);
 
   const MODEL = "claude-opus-5-5";
+  // Inside the claude.ai viewer the mic, location and direct API calls are blocked,
+  // but the page can ask Claude through the "sample" capability instead.
+  const inViewer = !!(window.claude && typeof window.claude.use === "function");
+  let sampleFn = null;
   const startTime = Date.now();
 
   // ---------- UI: log & caption ----------
@@ -222,6 +226,13 @@
     div.appendChild(document.createTextNode(text));
     $("log").appendChild(div);
     $("log").scrollTop = $("log").scrollHeight;
+  }
+  function logLink(url, label) {
+    try { window.open(url, "_blank", "noopener"); } catch {}
+    const a = document.createElement("a");
+    a.href = url; a.target = "_blank"; a.rel = "noopener"; a.textContent = "↗ " + label;
+    a.style.color = "var(--gold)"; a.style.display = "block"; a.style.marginTop = "4px";
+    const last = $("log").lastElementChild; if (last) last.appendChild(a);
   }
   function setState(s) { $("state").textContent = s; mode = s.toLowerCase(); }
 
@@ -426,6 +437,7 @@
     95: "thunderstorms", 96: "thunderstorms with hail", 99: "severe thunderstorms with hail" };
 
   function weather() {
+    if (inViewer) { say("I can't reach the weather satellites from in here. Here's a forecast link."); logLink("https://www.google.com/search?q=weather", "Local weather"); return; }
     if (!navigator.geolocation) return say("I can't determine your location in this browser, I'm afraid.");
     setState("Thinking");
     navigator.geolocation.getCurrentPosition(async pos => {
@@ -494,15 +506,13 @@
     if ((m = t.match(/^open (?:up )?(.+)/))) {
       const site = m[1].replace(/\.com$/, "").replace(/\s+/g, "");
       const url = SITES[site] || (/\./.test(m[1]) ? "https://" + m[1].replace(/\s+/g, "") : null);
-      if (url) { window.open(url, "_blank", "noopener"); say(`Opening ${m[1]}.`); return true; }
+      if (url) { say(`Opening ${m[1]}.`); logLink(url, m[1]); return true; }
     }
     if ((m = t.match(/^(?:search|google|look up)(?: for)?\s+(.+)/))) {
-      window.open("https://www.google.com/search?q=" + encodeURIComponent(m[1]), "_blank", "noopener");
-      say(`Searching for ${m[1]}.`); return true;
+      say(`Searching for ${m[1]}.`); logLink("https://www.google.com/search?q=" + encodeURIComponent(m[1]), "Search: " + m[1]); return true;
     }
     if ((m = t.match(/^(?:play)\s+(.+?)(?: on youtube)?$/))) {
-      window.open("https://www.youtube.com/results?search_query=" + encodeURIComponent(m[1]), "_blank", "noopener");
-      say(`Pulling up ${m[1]}.`); return true;
+      say(`Pulling up ${m[1]}.`); logLink("https://www.youtube.com/results?search_query=" + encodeURIComponent(m[1]), "YouTube: " + m[1]); return true;
     }
     const c = calc(t);
     if (c !== null) { say(`That's ${c.toLocaleString()}.`); return true; }
@@ -535,7 +545,7 @@
     }
     if (/\b(what can you do|help|commands)\b/.test(t) && t.length < 30) {
       say("I can tell the time and date, check the weather, set timers and reminders, take notes, do maths, search the web, open sites, flip coins, roll dice and run suit diagnostics." +
-        (settings.key ? " Anything else, just ask and I'll think it through." : " Add an API key in AI Core Settings and I can hold a proper conversation."));
+        (brainOnline() ? " Anything else, just ask and I'll think it through." : " Add an API key in AI Core Settings and I can hold a proper conversation."));
       return true;
     }
     return false;
@@ -548,6 +558,7 @@
 
   // ---------- Claude-powered brain ----------
   let history = [];
+  const brainOnline = () => !!(sampleFn || settings.key);
   function systemPrompt() {
     return `You are J.A.R.V.I.S., the AI butler from the Iron Man films: calm, impeccably polite, British, dryly witty, quietly brilliant and loyal. ` +
       `Address the user as "${settings.name}". Your replies are spoken aloud by a text-to-speech voice, so write in plain conversational sentences: no markdown, ` +
@@ -561,6 +572,22 @@
   async function ask(text) {
     history.push({ role: "user", content: text });
     setState("Thinking");
+    if (sampleFn) {
+      try {
+        const input = history.slice(-40).map(h => ({ role: h.role, content: typeof h.content === "string" ? h.content : h.content.filter(b => b.type === "text").map(b => b.text).join(" ") }));
+        while (input.length && input[0].role !== "user") input.shift();
+        input[0] = { role: "user", content: systemPrompt() + "\n\nThe user says: " + input[0].content };
+        const r = await sampleFn(input, { cache: false });
+        const reply = (r.text || "").trim();
+        history.push({ role: "assistant", content: reply || "..." });
+        return say(reply || "I'm not sure what to say to that.");
+      } catch (e) {
+        history.pop();
+        if (e && e.code === "not_granted") { sampleFn = null; updAI(); return say("I wasn't given permission to use my AI core, so I'm on local protocols for now."); }
+        if (e && e.code === "rate_limited") return say("I'm being rate limited. Give me a moment and try again.");
+        return say("My AI core didn't respond. Try again in a moment.");
+      }
+    }
     try {
       const r = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -604,7 +631,7 @@
     log("you", text);
     $("heard").textContent = "";
     if (await local(text)) return;
-    if (settings.key) return ask(text);
+    if (brainOnline()) return ask(text);
     say(`I'm running on local protocols only, so that's beyond me for now. Say "help" to hear what I can do, or add an API key in AI Core Settings.`);
   }
 
@@ -685,7 +712,7 @@
     const upd = () => { $("sBattery").textContent = Math.round(b.level * 100) + "%" + (b.charging ? " ⚡" : ""); $("bBattery").style.width = b.level * 100 + "%"; };
     upd(); b.onlevelchange = upd; b.onchargingchange = upd;
   }); else $("sBattery").textContent = "N/A";
-  const updAI = () => { $("sAI").textContent = settings.key ? "ONLINE" : "LOCAL"; $("sAI").style.color = settings.key ? "" : "var(--gold)"; };
+  const updAI = () => { $("sAI").textContent = brainOnline() ? "ONLINE" : "LOCAL"; $("sAI").style.color = brainOnline() ? "" : "var(--gold)"; };
   updAI();
 
   // ---------- suggestion chips ----------
@@ -705,7 +732,7 @@
   };
   $("btnMic").onclick = talk; cv.onclick = talk;
   document.addEventListener("keydown", e => {
-    if (e.code === "Space" && document.activeElement !== $("input") && !$("settings").open) { e.preventDefault(); if (!e.repeat) talk(); }
+    if (e.code === "Space" && !inViewer && document.activeElement !== $("input") && !$("settings").open) { e.preventDefault(); if (!e.repeat) talk(); }
   });
 
   $("optWake").checked = settings.wake; $("optVoice").checked = settings.speak;
@@ -727,8 +754,18 @@
     say(settings.key ? `AI core online. Ready when you are, ${settings.name}.` : `Settings saved, ${settings.name}.`);
   };
 
-  log("jarvis", "Systems online. Click the reactor, press the mic, or press Space to talk.");
-  if (settings.wake) startRecognition();
+  if (inViewer) {
+    document.querySelectorAll(".mic-only, .key-only").forEach(el => { el.hidden = true; });
+    settings.wake = false;
+    $("caption").textContent = "Good day. Type below and I'll answer out loud.";
+    $("reactor").title = "";
+    cv.onclick = () => $("input").focus();
+    log("jarvis", "Systems online. Type a request below. Voice input needs the standalone page in Chrome or Edge.");
+    window.claude.use("sample").then(s => { sampleFn = s; updAI(); }).catch(() => {});
+  } else {
+    log("jarvis", "Systems online. Click the reactor, press the mic, or press Space to talk.");
+    if (settings.wake) startRecognition();
+  }
 })();
 </script>
 </body>
