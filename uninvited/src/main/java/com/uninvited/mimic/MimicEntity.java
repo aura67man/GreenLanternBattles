@@ -135,13 +135,16 @@ public class MimicEntity extends HostileEntity {
 	// ---------------------------------------------------------------------------------------
 
 	/**
-	 * Puts on a player's face. {@code seed} picks the homoglyph and the tells, so the same
-	 * disguise is "wrong" the same way for everyone.
+	 * Puts on a player's face. The homoglyph is seeded by the world seed and the player's UUID,
+	 * so in a given world the fake "Alex" always has the same wrong letter (learnable). {@code seed}
+	 * varies the other tells (held item, armour) from one appearance to the next.
 	 */
 	public void disguiseAs(UninvitedState.KnownPlayer player, @Nullable ServerPlayerEntity online, long seed) {
+		long nameSeed = player.uuid().getLeastSignificantBits() ^ player.uuid().getMostSignificantBits()
+				^ (this.getWorld() instanceof ServerWorld serverWorld ? serverWorld.getSeed() : 0L);
 		this.dataTracker.set(DISGUISE_UUID, Optional.of(player.uuid()));
 		this.dataTracker.set(DISGUISE_NAME, player.name());
-		this.dataTracker.set(FAKE_NAME, Homoglyphs.disguise(player.name(), seed ^ player.uuid().getLeastSignificantBits()));
+		this.dataTracker.set(FAKE_NAME, Homoglyphs.disguise(player.name(), nameSeed));
 		this.dataTracker.set(SKIN_VALUE, player.skinValue() == null ? "" : player.skinValue());
 		this.dataTracker.set(SKIN_SIGNATURE, player.skinSignature() == null ? "" : player.skinSignature());
 		MimicTells.apply(this, online, seed);

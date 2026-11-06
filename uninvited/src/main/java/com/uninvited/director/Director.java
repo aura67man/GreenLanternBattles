@@ -29,6 +29,7 @@ public final class Director {
 		});
 		ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> BaseMeddling.forget(handler.getPlayer().getUuid()));
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> MimicDirector.clear());
+		VoiceScares.register();
 	}
 
 	private static void tickWorld(ServerWorld world) {
@@ -42,6 +43,7 @@ public final class Director {
 		if (lone.isEmpty()) return;
 
 		MimicDirector.tick(world, stage, activity, lone);
+		VoiceScares.tick(world, stage, activity, lone);
 		for (ServerPlayerEntity player : lone) {
 			BaseMeddling.tick(player, stage, activity, state.nightsSeen());
 			Scares.tick(player, stage, activity);

@@ -11,6 +11,8 @@ public enum ScareType {
 	ODD_BLOCK(Stage.WATCHING),
 	WATCHER(Stage.WATCHING),
 	FAKE_CHAT(Stage.BECOMING),
+	/** Only with Simple Voice Chat installed and voiceMimicry on. */
+	VOICE(Stage.BECOMING),
 	FOLLOWER(Stage.BECOMING),
 	HUNTER(Stage.HUNTING);
 

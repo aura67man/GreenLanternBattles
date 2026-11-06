@@ -4,6 +4,7 @@ import com.uninvited.chat.FakeChat;
 import com.uninvited.config.UninvitedConfig;
 import com.uninvited.director.BaseMeddling;
 import com.uninvited.director.MimicDirector;
+import com.uninvited.director.VoiceScares;
 import com.uninvited.mimic.MimicMode;
 import com.uninvited.stage.Stage;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
@@ -95,6 +96,7 @@ public final class Scares {
 			case FOLLOWER -> MimicDirector.appearFor(player, stage, MimicMode.FOLLOW) != null;
 			case HUNTER -> MimicDirector.appearFor(player, stage, MimicMode.HUNT) != null;
 			case FAKE_CHAT -> FakeChat.sendTo(player, true);
+			case VOICE -> VoiceScares.speakNow(player);
 		};
 	}
 }

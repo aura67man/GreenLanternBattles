@@ -10,7 +10,8 @@
   "environment": "*",
   "entrypoints": {
     "main": ["com.uninvited.Uninvited"],
-    "client": ["com.uninvited.client.UninvitedClient"]
+    "client": ["com.uninvited.client.UninvitedClient"],
+    "voicechat": ["com.uninvited.voice.UninvitedVoicePlugin"]
   },
   "depends": {
     "fabricloader": ">=0.16.0",

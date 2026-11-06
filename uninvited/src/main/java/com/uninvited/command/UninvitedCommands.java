@@ -6,6 +6,7 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.uninvited.config.UninvitedConfig;
+import com.uninvited.director.VoiceScares;
 import com.uninvited.mimic.MimicEntity;
 import com.uninvited.mimic.MimicMode;
 import com.uninvited.mimic.MimicSpawner;
@@ -73,7 +74,9 @@ public final class UninvitedCommands {
 					return removed;
 				}))
 				.then(literal("reload").executes(ctx -> {
+					boolean voiceWasOn = UninvitedConfig.get().voiceMimicry;
 					UninvitedConfig.load();
+					VoiceScares.onConfigReloaded(ctx.getSource().getServer(), voiceWasOn);
 					ctx.getSource().sendFeedback(() -> Text.literal("Reloaded " + UninvitedConfig.path().getFileName()), true);
 					return 1;
 				})));
@@ -158,6 +161,7 @@ public final class UninvitedCommands {
 				+ (state.isForced() ? " (forced)" : "") + ", nights seen: " + state.nightsSeen()
 				+ (UninvitedState.isNight(server.getOverworld()) ? ", it is night" : ", it is day")), false);
 		StatusExtras.appendMimics(server, source);
+		source.sendFeedback(() -> Text.literal(VoiceScares.statusLine()), false);
 
 		MutableText alone = Text.literal("Alone: ");
 		MutableText grouped = Text.literal("In a group: ");

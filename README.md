@@ -13,3 +13,7 @@ Fan-made; all franchises belong to their respective owners.
 A play-money casino in one self-contained `casino.html` (vanilla JS, Canvas, no libraries). You start with $1,000 in chips; lose them all and you start over.
 
 Games: Blackjack, Casino Hold'em, Lucky Sevens slots, Roulette, Craps, Rocket Crash and Baccarat. Each game has a rules screen before you sit down, and you can reopen it from the RULES button.
+
+## UNINVITED (`uninvited/`)
+
+A Fabric 1.21.1 horror mod for small groups of friends: an entity that wears your friends' skins and only hunts players who are alone. Java source, Gradle build. See [`uninvited/README.md`](uninvited/README.md) for building, the config, the debug commands and how to test it.
