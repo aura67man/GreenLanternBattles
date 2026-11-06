@@ -1,6 +1,7 @@
 package com.uninvited.director;
 
 import com.uninvited.config.UninvitedConfig;
+import com.uninvited.scare.Scares;
 import com.uninvited.stage.Stage;
 import com.uninvited.stage.UninvitedState;
 import com.uninvited.util.AloneUtil;
@@ -43,6 +44,7 @@ public final class Director {
 		MimicDirector.tick(world, stage, activity, lone);
 		for (ServerPlayerEntity player : lone) {
 			BaseMeddling.tick(player, stage, activity, state.nightsSeen());
+			Scares.tick(player, stage, activity);
 		}
 	}
 

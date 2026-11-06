@@ -1,10 +1,13 @@
 package com.uninvited;
 
+import com.uninvited.chat.ChatMemory;
 import com.uninvited.command.UninvitedCommands;
 import com.uninvited.config.UninvitedConfig;
 import com.uninvited.director.Director;
 import com.uninvited.mimic.MimicEntities;
+import com.uninvited.scare.Scares;
 import com.uninvited.stage.StageTracker;
+import com.uninvited.util.Scheduler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.util.Identifier;
@@ -25,6 +28,9 @@ public final class Uninvited implements ModInitializer {
 		MimicEntities.register();
 		StageTracker.register();
 		Director.register();
+		Scheduler.register();
+		Scares.register();
+		ChatMemory.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				UninvitedCommands.register(dispatcher));
 		LOG.info("UNINVITED loaded. Stay together.");

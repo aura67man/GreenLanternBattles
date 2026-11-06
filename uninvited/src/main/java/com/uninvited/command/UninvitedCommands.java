@@ -9,6 +9,8 @@ import com.uninvited.config.UninvitedConfig;
 import com.uninvited.mimic.MimicEntity;
 import com.uninvited.mimic.MimicMode;
 import com.uninvited.mimic.MimicSpawner;
+import com.uninvited.scare.ScareType;
+import com.uninvited.scare.Scares;
 import com.uninvited.stage.Stage;
 import com.uninvited.stage.UninvitedState;
 import com.uninvited.util.AloneUtil;
@@ -49,6 +51,15 @@ public final class UninvitedCommands {
 											return builder.buildFuture();
 										})
 										.executes(ctx -> summon(ctx, StringArgumentType.getString(ctx, "mode"))))))
+				.then(literal("scare")
+						.then(argument("player", EntityArgumentType.player())
+								.executes(ctx -> scare(ctx, null))
+								.then(argument("type", StringArgumentType.word())
+										.suggests((ctx, builder) -> {
+											for (ScareType type : ScareType.values()) builder.suggest(type.name().toLowerCase(Locale.ROOT));
+											return builder.buildFuture();
+										})
+										.executes(ctx -> scare(ctx, StringArgumentType.getString(ctx, "type"))))))
 				.then(literal("despawn").executes(ctx -> {
 					int count = 0;
 					for (ServerWorld world : ctx.getSource().getServer().getWorlds()) {
@@ -108,6 +119,31 @@ public final class UninvitedCommands {
 		}
 		source.sendFeedback(() -> Text.literal("Summoned a mimic as " + mimic.getFakeName() + " (" + mode.name().toLowerCase(Locale.ROOT)
 				+ ", targeting " + target.getGameProfile().getName() + ")"), true);
+		return 1;
+	}
+
+	private static int scare(CommandContext<ServerCommandSource> ctx, String typeName) throws CommandSyntaxException {
+		ServerCommandSource source = ctx.getSource();
+		ServerPlayerEntity player = EntityArgumentType.getPlayer(ctx, "player");
+		Stage stage = UninvitedState.get(source.getServer()).stage();
+		ScareType ran;
+		if (typeName == null) {
+			ran = Scares.runRandom(player, stage);
+		} else {
+			ScareType type;
+			try {
+				type = ScareType.valueOf(typeName.toUpperCase(Locale.ROOT));
+			} catch (IllegalArgumentException e) {
+				source.sendError(Text.literal("Unknown scare " + typeName));
+				return 0;
+			}
+			ran = Scares.run(player, type, stage.atLeast(type.minStage) ? stage : type.minStage) ? type : null;
+		}
+		if (ran == null) {
+			source.sendError(Text.literal("Nothing to do here (no doors/chests/torches nearby, no chat history, or no room to spawn)"));
+			return 0;
+		}
+		source.sendFeedback(() -> Text.literal("Scared " + player.getGameProfile().getName() + ": " + ran.name().toLowerCase(Locale.ROOT)), true);
 		return 1;
 	}
 
