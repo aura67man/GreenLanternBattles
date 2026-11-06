@@ -3,16 +3,26 @@ package com.uninvited.command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
+import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.uninvited.config.UninvitedConfig;
+import com.uninvited.mimic.MimicEntity;
+import com.uninvited.mimic.MimicMode;
+import com.uninvited.mimic.MimicSpawner;
 import com.uninvited.stage.Stage;
 import com.uninvited.stage.UninvitedState;
 import com.uninvited.util.AloneUtil;
+import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.MutableText;
 import net.minecraft.text.Text;
 import net.minecraft.util.Formatting;
+import net.minecraft.util.math.Vec3d;
+
+import java.util.Locale;
 
 import static net.minecraft.server.command.CommandManager.argument;
 import static net.minecraft.server.command.CommandManager.literal;
@@ -30,6 +40,27 @@ public final class UninvitedCommands {
 								.executes(ctx -> forceStage(ctx, IntegerArgumentType.getInteger(ctx, "stage"))))
 						.then(literal("auto").executes(ctx -> forceStage(ctx, 0))))
 				.then(literal("status").executes(UninvitedCommands::status))
+				.then(literal("summon")
+						.then(argument("player", EntityArgumentType.player())
+								.executes(ctx -> summon(ctx, null))
+								.then(argument("mode", StringArgumentType.word())
+										.suggests((ctx, builder) -> {
+											for (MimicMode mode : MimicMode.values()) builder.suggest(mode.name().toLowerCase(Locale.ROOT));
+											return builder.buildFuture();
+										})
+										.executes(ctx -> summon(ctx, StringArgumentType.getString(ctx, "mode"))))))
+				.then(literal("despawn").executes(ctx -> {
+					int count = 0;
+					for (ServerWorld world : ctx.getSource().getServer().getWorlds()) {
+						for (MimicEntity mimic : MimicSpawner.activeMimics(world)) {
+							mimic.vanish();
+							count++;
+						}
+					}
+					int removed = count;
+					ctx.getSource().sendFeedback(() -> Text.literal("Removed " + removed + " mimic(s)"), true);
+					return removed;
+				}))
 				.then(literal("reload").executes(ctx -> {
 					UninvitedConfig.load();
 					ctx.getSource().sendFeedback(() -> Text.literal("Reloaded " + UninvitedConfig.path().getFileName()), true);
@@ -44,6 +75,39 @@ public final class UninvitedCommands {
 		ctx.getSource().sendFeedback(() -> stage == 0
 				? Text.literal("Stage now follows the night counter: " + now.number + " (" + now.title + ")")
 				: Text.literal("Forced stage " + now.number + " (" + now.title + ")"), true);
+		return 1;
+	}
+
+	private static int summon(CommandContext<ServerCommandSource> ctx, String modeName) throws CommandSyntaxException {
+		ServerCommandSource source = ctx.getSource();
+		ServerPlayerEntity disguiseAs = EntityArgumentType.getPlayer(ctx, "player");
+		MimicMode mode;
+		if (modeName == null) {
+			mode = MimicDirectorHooks.defaultModeFor(UninvitedState.get(source.getServer()).stage());
+		} else {
+			try {
+				mode = MimicMode.valueOf(modeName.toUpperCase(Locale.ROOT));
+			} catch (IllegalArgumentException e) {
+				source.sendError(Text.literal("Unknown mode " + modeName));
+				return 0;
+			}
+		}
+
+		// The mimic targets whoever ran the command (if a player), otherwise the disguise's owner.
+		ServerPlayerEntity target = source.getPlayer() != null ? source.getPlayer() : disguiseAs;
+		ServerWorld world = source.getWorld();
+		Vec3d look = source.getRotation() == null ? Vec3d.ZERO
+				: Vec3d.fromPolar(0, source.getRotation().y);
+		Vec3d pos = source.getPosition().add(look.multiply(5));
+		float yaw = source.getRotation() == null ? 0 : source.getRotation().y + 180f;
+
+		MimicEntity mimic = MimicSpawner.spawn(world, pos, yaw, MimicSpawner.disguiseOf(disguiseAs), target, mode, 20 * 300);
+		if (mimic == null) {
+			source.sendError(Text.literal("Could not spawn a mimic"));
+			return 0;
+		}
+		source.sendFeedback(() -> Text.literal("Summoned a mimic as " + mimic.getFakeName() + " (" + mode.name().toLowerCase(Locale.ROOT)
+				+ ", targeting " + target.getGameProfile().getName() + ")"), true);
 		return 1;
 	}
 

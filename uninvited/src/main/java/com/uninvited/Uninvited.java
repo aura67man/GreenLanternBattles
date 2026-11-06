@@ -2,6 +2,7 @@ package com.uninvited;
 
 import com.uninvited.command.UninvitedCommands;
 import com.uninvited.config.UninvitedConfig;
+import com.uninvited.mimic.MimicEntities;
 import com.uninvited.stage.StageTracker;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -20,6 +21,7 @@ public final class Uninvited implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		UninvitedConfig.load();
+		MimicEntities.register();
 		StageTracker.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				UninvitedCommands.register(dispatcher));
