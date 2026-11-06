@@ -5,7 +5,17 @@ import com.uninvited.stage.UninvitedState;
 import net.minecraft.block.BlockState;
 import net.minecraft.entity.EntityType;
 import net.minecraft.entity.EquipmentSlot;
+import com.uninvited.mimic.ai.FleeGoal;
+import com.uninvited.mimic.ai.FollowGoal;
+import com.uninvited.mimic.ai.HuntGoal;
+import com.uninvited.mimic.ai.LureGoal;
+import com.uninvited.mimic.ai.MimicBrain;
+import com.uninvited.mimic.ai.MimicNavigation;
+import com.uninvited.mimic.ai.WatchGoal;
+import net.minecraft.entity.ai.goal.LongDoorInteractGoal;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
+import net.minecraft.entity.ai.goal.SwimGoal;
+import net.minecraft.entity.ai.pathing.EntityNavigation;
 import net.minecraft.entity.attribute.DefaultAttributeContainer;
 import net.minecraft.entity.attribute.EntityAttributeInstance;
 import net.minecraft.entity.attribute.EntityAttributes;
@@ -102,7 +112,21 @@ public class MimicEntity extends HostileEntity {
 
 	@Override
 	protected void initGoals() {
+		// Lower number = higher priority. Each behaviour goal only runs in its own MimicMode.
+		this.goalSelector.add(0, new SwimGoal(this));
+		this.goalSelector.add(1, new FleeGoal(this));
+		this.goalSelector.add(2, new LongDoorInteractGoal(this, true));
+		this.goalSelector.add(3, new WatchGoal(this));
+		this.goalSelector.add(3, new HuntGoal(this));
+		this.goalSelector.add(4, new LureGoal(this));
+		this.goalSelector.add(5, new FollowGoal(this));
 		this.goalSelector.add(8, new LookAtEntityGoal(this, PlayerEntity.class, 64.0f, 1.0f));
+	}
+
+	@Override
+	protected EntityNavigation createNavigation(World world) {
+		// Salt-aware pathfinding: see SaltAvoidingNodeMaker.
+		return new MimicNavigation(this, world);
 	}
 
 	// ---------------------------------------------------------------------------------------
@@ -233,7 +257,9 @@ public class MimicEntity extends HostileEntity {
 		}
 		if (--lifetimeTicks <= 0) {
 			vanish();
+			return;
 		}
+		MimicBrain.tick(this);
 	}
 
 	// ---------------------------------------------------------------------------------------

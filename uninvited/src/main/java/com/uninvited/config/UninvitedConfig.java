@@ -46,8 +46,8 @@ public final class UninvitedConfig {
 	public int maxMimics = 1;
 
 	// --- The mimic --------------------------------------------------------------------------
-	/** Damage per hit during the hunting stage (2.0 = one heart). */
-	public double mimicDamage = 5.0;
+	/** Damage per hit during the hunting stage (2.0 = one heart). It lands at most 3 hits per attack. */
+	public double mimicDamage = 4.0;
 	/** Ticks between two mimic hits. */
 	public int mimicAttackCooldownTicks = 30;
 	public double mimicHealth = 30.0;

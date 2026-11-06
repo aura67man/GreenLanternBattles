@@ -21,11 +21,14 @@ import java.util.Random;
  * If the real player is offline we can't compare, so it gets a plausible random outfit.
  */
 public final class MimicTells {
-	/** Things a person might plausibly be holding. {@code null} means an empty hand. */
+	/**
+	 * Things a person might plausibly be holding. {@code null} means an empty hand. No weapons or
+	 * tools: mobs get their held item's attack bonus, and the damage should stay predictable.
+	 */
 	private static final Item[] HELD = {
 			null, Items.STICK, Items.TORCH, Items.ROTTEN_FLESH, Items.BONE, Items.POPPY,
-			Items.WHEAT_SEEDS, Items.DIRT, Items.STONE_PICKAXE, Items.BREAD, Items.COMPASS,
-			Items.WOODEN_SWORD, Items.OAK_SAPLING, Items.STRING
+			Items.WHEAT_SEEDS, Items.DIRT, Items.FLINT, Items.BREAD, Items.COMPASS,
+			Items.FEATHER, Items.OAK_SAPLING, Items.STRING
 	};
 
 	private static final EquipmentSlot[] ARMOR_SLOTS = {

@@ -10,9 +10,8 @@ final class MimicDirectorHooks {
 	/** What a debug-summoned mimic does when no mode is given: whatever fits the current stage. */
 	static MimicMode defaultModeFor(Stage stage) {
 		return switch (stage) {
-			case DORMANT, SETTLING_IN -> MimicMode.IDLE;
 			case WATCHING -> MimicMode.WATCH;
-			case BECOMING -> MimicMode.FOLLOW;
+			case DORMANT, SETTLING_IN, BECOMING -> MimicMode.FOLLOW;
 			case HUNTING -> MimicMode.HUNT;
 		};
 	}

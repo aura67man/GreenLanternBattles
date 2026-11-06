@@ -2,6 +2,7 @@ package com.uninvited;
 
 import com.uninvited.command.UninvitedCommands;
 import com.uninvited.config.UninvitedConfig;
+import com.uninvited.director.Director;
 import com.uninvited.mimic.MimicEntities;
 import com.uninvited.stage.StageTracker;
 import net.fabricmc.api.ModInitializer;
@@ -23,6 +24,7 @@ public final class Uninvited implements ModInitializer {
 		UninvitedConfig.load();
 		MimicEntities.register();
 		StageTracker.register();
+		Director.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				UninvitedCommands.register(dispatcher));
 		LOG.info("UNINVITED loaded. Stay together.");
