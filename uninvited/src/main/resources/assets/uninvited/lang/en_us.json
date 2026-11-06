@@ -1,3 +1,6 @@
 {
-  "entity.uninvited.mimic": "Player"
+  "entity.uninvited.mimic": "Player",
+  "block.uninvited.salt": "Salt",
+  "item.uninvited.witness_bell": "Witness Bell",
+  "item.uninvited.witness_bell.tooltip": "Ring it. The real ones will shine."
 }

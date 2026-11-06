@@ -4,6 +4,7 @@ import com.uninvited.chat.ChatMemory;
 import com.uninvited.command.UninvitedCommands;
 import com.uninvited.config.UninvitedConfig;
 import com.uninvited.director.Director;
+import com.uninvited.item.ModItems;
 import com.uninvited.mimic.MimicEntities;
 import com.uninvited.scare.Scares;
 import com.uninvited.stage.StageTracker;
@@ -25,6 +26,7 @@ public final class Uninvited implements ModInitializer {
 	@Override
 	public void onInitialize() {
 		UninvitedConfig.load();
+		ModItems.register();
 		MimicEntities.register();
 		StageTracker.register();
 		Director.register();

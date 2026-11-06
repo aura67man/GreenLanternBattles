@@ -12,6 +12,7 @@ import com.uninvited.mimic.ai.LureGoal;
 import com.uninvited.mimic.ai.MimicBrain;
 import com.uninvited.mimic.ai.MimicNavigation;
 import com.uninvited.mimic.ai.WatchGoal;
+import com.uninvited.salt.SaltRules;
 import net.minecraft.entity.ai.goal.LongDoorInteractGoal;
 import net.minecraft.entity.ai.goal.LookAtEntityGoal;
 import net.minecraft.entity.ai.goal.SwimGoal;
@@ -253,6 +254,11 @@ public class MimicEntity extends HostileEntity {
 
 		if (revealTicks >= 0) {
 			if (revealTicks-- == 0) vanish();
+			return;
+		}
+		if (SaltRules.isSalt(this.getWorld().getBlockState(this.getBlockPos()))) {
+			// Knocked or pushed onto salt: it can't stand there, and it can't hold its shape.
+			reveal();
 			return;
 		}
 		if (--lifetimeTicks <= 0) {

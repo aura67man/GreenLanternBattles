@@ -3,6 +3,7 @@ package com.uninvited.mimic.ai;
 import com.uninvited.config.UninvitedConfig;
 import com.uninvited.mimic.MimicEntity;
 import com.uninvited.mimic.MimicMode;
+import com.uninvited.salt.SaltRules;
 import net.minecraft.util.Hand;
 import net.minecraft.world.Difficulty;
 
@@ -90,7 +91,8 @@ public class HuntGoal extends MimicGoal {
 				stare();
 				if (phaseTicks % 5 == 1 && !mimic.getNavigation().startMovingTo(target, 1.4)) stuckTicks += 5;
 				double reach = mimic.getWidth() * 2.0 + target.getWidth();
-				if (distSq <= reach * reach && attackCooldown <= 0 && mimic.canSee(target)) {
+				if (distSq <= reach * reach && attackCooldown <= 0 && mimic.canSee(target)
+						&& !SaltRules.saltBetween(mimic.getWorld(), mimic.getPos(), target.getPos())) {
 					attackCooldown = UninvitedConfig.get().mimicAttackCooldownTicks;
 					mimic.swingHand(Hand.MAIN_HAND);
 					if (mimic.tryAttack(target)) hits++;

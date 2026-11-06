@@ -1,0 +1,15 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "category": "equipment",
+  "pattern": [
+    " S ",
+    "NGN",
+    "N N"
+  ],
+  "key": {
+    "S": { "item": "minecraft:string" },
+    "N": { "item": "minecraft:gold_nugget" },
+    "G": { "item": "minecraft:gold_ingot" }
+  },
+  "result": { "id": "uninvited:witness_bell", "count": 1 }
+}

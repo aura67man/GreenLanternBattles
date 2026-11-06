@@ -1,0 +1,9 @@
+{
+  "type": "minecraft:crafting_shapeless",
+  "category": "misc",
+  "ingredients": [
+    { "item": "minecraft:bone_meal" },
+    { "item": "minecraft:sand" }
+  ],
+  "result": { "id": "uninvited:salt", "count": 4 }
+}
