@@ -1,0 +1,62 @@
+plugins {
+	// Loom 1.17 (the newest line that still runs on Java 21) ships two plugin ids:
+	// "fabric-loom-remap" is the one for obfuscated Minecraft versions such as 1.21.1 (Yarn + remapping).
+	id 'net.fabricmc.fabric-loom-remap' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+repositories {
+	// Simple Voice Chat API. Only needed at compile time; SVC itself is optional at runtime.
+	maven {
+		name = 'henkelmax'
+		url = 'https://maven.maxhenkel.de/repository/public'
+	}
+}
+
+loom {
+	splitEnvironmentSourceSets()
+
+	mods {
+		"uninvited" {
+			sourceSet sourceSets.main
+			sourceSet sourceSets.client
+		}
+	}
+}
+
+dependencies {
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// compileOnly: the API is on the compile classpath but is NOT bundled and NOT required.
+	// At runtime the classes only exist if the player installed Simple Voice Chat.
+	compileOnly "de.maxhenkel.voicechat:voicechat-api:${project.voicechat_api_version}"
+}
+
+processResources {
+	def version = project.version
+	inputs.property "version", version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+	it.options.encoding = 'UTF-8'
+}
+
+java {
+	withSourcesJar()
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}

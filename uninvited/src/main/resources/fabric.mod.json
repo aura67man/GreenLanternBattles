@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "id": "uninvited",
+  "version": "${version}",
+  "name": "UNINVITED",
+  "description": "Something joined the world that isn't on the player list. It only hunts players who are alone.",
+  "authors": ["aura67man"],
+  "license": "MIT",
+  "icon": "assets/uninvited/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.uninvited.Uninvited"],
+    "client": ["com.uninvited.client.UninvitedClient"]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "minecraft": "~1.21.1",
+    "java": ">=21",
+    "fabric-api": "*"
+  },
+  "suggests": {
+    "voicechat": "*"
+  }
+}
