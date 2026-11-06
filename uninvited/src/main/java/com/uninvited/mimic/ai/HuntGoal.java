@@ -4,6 +4,7 @@ import com.uninvited.config.UninvitedConfig;
 import com.uninvited.mimic.MimicEntity;
 import com.uninvited.mimic.MimicMode;
 import com.uninvited.salt.SaltRules;
+import com.uninvited.taken.Taken;
 import net.minecraft.util.Hand;
 import net.minecraft.world.Difficulty;
 
@@ -13,8 +14,10 @@ import net.minecraft.world.Difficulty;
  *   <li>STALK: shadows the lone target from behind for a while.</li>
  *   <li>APPROACH: walks up openly, like a friend would, and waves when it gets close.</li>
  *   <li>PAUSE: stops a few blocks away and just stares.</li>
- *   <li>CHARGE: sprints in and attacks. After a few hits (or if it takes too much damage) it
- *       runs and vanishes, so a player who fights back or runs to their friends survives.</li>
+ *   <li>CHARGE: sprints in and attacks. After {@code hitsBeforeTaken} hits its next reach is the
+ *       grab, and the player is TAKEN (see {@link Taken}). Hurting it enough, or getting back to
+ *       your friends, makes it flee instead. With {@code takenEnabled} off it just runs after
+ *       a few hits.</li>
  * </ol>
  * If it can't reach the target (salt ring, pillar, water), it goes back to stalking the edge.
  */
@@ -93,11 +96,17 @@ public class HuntGoal extends MimicGoal {
 				double reach = mimic.getWidth() * 2.0 + target.getWidth();
 				if (distSq <= reach * reach && attackCooldown <= 0 && mimic.canSee(target)
 						&& !SaltRules.saltBetween(mimic.getWorld(), mimic.getPos(), target.getPos())) {
-					attackCooldown = UninvitedConfig.get().mimicAttackCooldownTicks;
+					UninvitedConfig config = UninvitedConfig.get();
+					attackCooldown = config.mimicAttackCooldownTicks;
 					mimic.swingHand(Hand.MAIN_HAND);
-					if (mimic.tryAttack(target)) hits++;
+					// After a couple of hits, the next reach is the grab: it takes them.
+					if (config.takenEnabled && hits >= config.hitsBeforeTaken && Taken.take(mimic, target)) return;
+					mimic.tryAttack(target);
+					// Counted even when no damage lands (creative), so the grab still comes.
+					hits++;
 				}
-				if (hits >= MAX_HITS || phaseTicks >= phaseLength) {
+				int maxHits = UninvitedConfig.get().takenEnabled ? UninvitedConfig.get().hitsBeforeTaken + MAX_HITS : MAX_HITS;
+				if (hits >= maxHits || phaseTicks >= phaseLength) {
 					mimic.setMode(MimicMode.FLEE);
 				} else if (stuckTicks > 60) {
 					// Can't get to them. Stand at the edge and wait.

@@ -41,9 +41,18 @@ The mod jar is written to `build/libs/uninvited-<version>.jar`.
 | 1 Settling in | 1–2 | Footsteps behind you that stop when you stop (then one more step). A wooden door or trapdoor nearby opens and shuts. A chest or barrel in your base opens and closes. A torch you aren't looking at drops off the wall. Sounds are pitched down and only you hear them. |
 | 2 Watching | 3–4 | The mimic appears near the edge of view distance wearing a friend's skin. It stares, and vanishes if you look straight at it for about a second or get within 20 blocks. Once a night, a stray block of dirt appears on the floor inside your base while you're away. |
 | 3 Becoming | 5–6 | It walks around as a copy of a friend, follows you at 14–28 blocks from behind, and waves when you notice it. Fake chat starts. With voice mimicry on, it may speak. |
-| 4 Hunting | 7+ | It stalks you, walks up openly like a friend would, pauses, then charges. It lands at most 3 hits (4 damage each by default) and then runs. It also flees if you hurt it enough or reach your friends. |
+| 4 Hunting | 7+ | It stalks you, walks up openly like a friend would, pauses, then charges. After 2 hits its next reach is the grab: you are **Taken** (see below). It flees instead if you hurt it enough or reach your friends. |
 
 During the day everything is scaled by `daytimeActivity` (0.25).
+
+**Taken (the hunt's ending):** when the hunter catches you, it doesn't kill you.
+
+1. The screen goes black and you can't move.
+2. You wake up alone, 250–450 blocks away, preferably in a cave (in a superflat world there are no caves, so it's the surface), under Darkness. *"You don't remember walking here."*
+3. Meanwhile a mimic wearing **your** face appears behind the friend nearest to where you were taken, walks up and tags along with them. It chats in your name (your real old lines and some new ones like "dont listen to them"), and with voice mimicry on it uses your voice too. If nobody else is online, it waits for you at home instead.
+4. It ends when someone exposes it (Witness Bell, or punching it, which a real player would just take), when you get back within 12 blocks of it (it turns, stares at you for two seconds and comes apart), or after `impostorMinutes`.
+
+While you're taken, the director leaves you alone. Set `takenEnabled` to false for the old ending (a few hits, then it runs).
 
 **Tells** (things players can learn to spot):
 
@@ -85,6 +94,11 @@ The file is created on first start. Edit it while the server is stopped, or run 
 | `mimicAttackCooldownTicks` | 30 | between hits |
 | `mimicHealth` | 30.0 | |
 | `mimicFleeHealthFraction` | 0.5 | flees after losing this much health |
+| `takenEnabled` | true | the hunt ends in an abduction instead of just hits |
+| `hitsBeforeTaken` | 2 | hits it lands before the grab |
+| `takenDistanceMin` / `takenDistanceMax` | 250 / 450 | how far away a taken player wakes up |
+| `impostorMinutes` | 8 | how long the impostor lasts if nobody exposes it |
+| `impostorChatSeconds` | 45 | average gap between its chat lines |
 | `fakeChat` | true | |
 | `fakeChatChancePerMinute` | 0.35 | stage 3+ (90 s cooldown per player) |
 | `bellCooldownSeconds` | 300 | |
@@ -102,6 +116,7 @@ The file is created on first start. Edit it while the server is stopped, or run 
 | `/uninvited summon <player> [idle\|watch\|follow\|hunt\|flee]` | spawn a mimic disguised as `<player>`, 5 blocks in front of you. It targets you. With no mode, it uses the current stage's behaviour. |
 | `/uninvited scare <player> [type]` | run a random stage-appropriate scare, or a specific one: `footsteps door chest torch odd_block watcher fake_chat voice follower hunter`. Ignores the alone check and cooldowns. |
 | `/uninvited status` | stage, nights, day/night, every live mimic (disguise, shown name, mode, target, position), voice status, who is alone and who is grouped |
+| `/uninvited take <player>` | take that player right now (blackout, teleport, impostor) |
 | `/uninvited despawn` | remove all mimics |
 | `/uninvited reload` | reload the config (turning voice off wipes all voice buffers immediately) |
 
@@ -124,7 +139,8 @@ The dev server is in online mode by default. For several local clients, set `onl
 3. **AI.**
    - `/uninvited stage 2`, then `/execute at @s positioned ^ ^ ^-40 run uninvited summon <you> watch`. Turn round and look at it: it's gone in about a second.
    - `stage 3` plus `summon <you> follow`. It keeps behind you, and when you turn it stops and waves. Walk at it and it vanishes.
-   - `stage 4` in survival plus `summon <you> hunt`. It stalks for 8–23 s, walks up, pauses, charges, hits up to 3 times, then flees. Have a friend come within 24 blocks of you and it runs.
+   - `stage 4` in survival plus `summon <you> hunt`. It stalks for 8–23 s, walks up, pauses, charges, hits twice, then grabs you. Have a friend come within 24 blocks of you and it runs instead.
+   - **Taken** (two players): with a friend online, `/uninvited take <you>`. You black out and wake up far away, and your friend sees "you" walk up behind them and start chatting. `/uninvited status` shows `Taken: <you> (impostor with <friend>)`. `/tp` back next to it and it turns, stares and comes apart. Alone, the impostor appears in your base when you get within 40 blocks of home.
 4. **Scares and fake chat.** Put a wooden door, a chest and a couple of torches near you, then `/uninvited scare <you> door`, `chest`, `torch`, `footsteps` (walk, then stop). For fake chat, have a friend type something like `come here`, then `/uninvited stage 3` and `/uninvited scare <you> fake_chat`. You'll see `<Friend> come here` and they won't.
 5. **Salt and bell.** Craft both (or `/give @s uninvited:salt 64` and `/give @s uninvited:witness_bell`). Ring yourself with salt at least 2 blocks out, then `stage 4` and `summon <you> hunt` outside the ring: it circles but can't get in. Summon one in `follow` mode and ring the bell: you glow, it flickers out, and the bell shows its cooldown.
 6. **Voice (optional).** Install [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) for 1.21.1 on the server and the clients. Set `"voiceMimicry": true` in `config/uninvited.json` and restart (or `/uninvited reload`). Everyone gets the notice in chat. Talk or laugh for a bit, `stage 3`, `summon <friend> follow`, then `/uninvited scare <you> voice`. The friend's voice comes from the mimic, a little slower and lower, and only you hear it. Without SVC, `/uninvited status` says voice is unavailable and nothing else changes.
@@ -157,6 +173,7 @@ com.uninvited
 ├── chat/                      ChatMemory (RAM only), FakeChat
 ├── salt/                      SaltBlock, SaltRules, SaltAvoidingNodeMaker (pathfinding exclusion)
 ├── item/                      ModItems, WitnessBellItem
+├── taken/                     Taken (the grab), TakenDestination (where you wake up), TakenTracker (the impostor)
 ├── voicebridge/               SVC-free interface to the optional voice integration
 └── voice/                     ALL Simple Voice Chat code (plugin, capture buffer, DSP, playback)
 client (src/client)

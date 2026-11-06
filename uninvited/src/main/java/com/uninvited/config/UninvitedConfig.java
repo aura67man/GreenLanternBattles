@@ -54,6 +54,23 @@ public final class UninvitedConfig {
 	/** The mimic gives up and vanishes after losing this fraction of its health. */
 	public double mimicFleeHealthFraction = 0.5;
 
+	// --- Taken (the hunt's climax) --------------------------------------------------------
+	/**
+	 * When the hunter catches a lone player it doesn't kill them: it takes them. They black out
+	 * and wake up somewhere dark and far away, while a mimic wearing their face joins their friends.
+	 * Off = the old behaviour (a few hits, then it runs).
+	 */
+	public boolean takenEnabled = true;
+	/** Hits the hunter lands before its next reach becomes the grab. */
+	public int hitsBeforeTaken = 2;
+	/** How far away (blocks) a taken player wakes up. */
+	public int takenDistanceMin = 250;
+	public int takenDistanceMax = 450;
+	/** How long the impostor keeps going if nobody exposes it. */
+	public int impostorMinutes = 8;
+	/** Average seconds between the impostor's chat lines (in the taken player's name). */
+	public int impostorChatSeconds = 45;
+
 	// --- Fake chat --------------------------------------------------------------------------
 	public boolean fakeChat = true;
 	/** Chance per minute, per lone player, of a fake chat line (stage 3+). */
@@ -123,6 +140,11 @@ public final class UninvitedConfig {
 		mimicHealth = Math.max(1, mimicHealth);
 		mimicFleeHealthFraction = clamp01(mimicFleeHealthFraction);
 		bellCooldownSeconds = Math.max(0, bellCooldownSeconds);
+		hitsBeforeTaken = Math.max(0, hitsBeforeTaken);
+		takenDistanceMin = Math.max(32, takenDistanceMin);
+		takenDistanceMax = Math.max(takenDistanceMin, takenDistanceMax);
+		impostorMinutes = Math.max(1, impostorMinutes);
+		impostorChatSeconds = Math.max(5, impostorChatSeconds);
 		bellRadius = Math.max(1, bellRadius);
 		bellGlowSeconds = Math.max(1, bellGlowSeconds);
 	}

@@ -12,6 +12,8 @@ import com.uninvited.mimic.MimicMode;
 import com.uninvited.mimic.MimicSpawner;
 import com.uninvited.scare.ScareType;
 import com.uninvited.scare.Scares;
+import com.uninvited.taken.Taken;
+import com.uninvited.taken.TakenTracker;
 import com.uninvited.stage.Stage;
 import com.uninvited.stage.UninvitedState;
 import com.uninvited.util.AloneUtil;
@@ -61,6 +63,16 @@ public final class UninvitedCommands {
 											return builder.buildFuture();
 										})
 										.executes(ctx -> scare(ctx, StringArgumentType.getString(ctx, "type"))))))
+				.then(literal("take")
+						.then(argument("player", EntityArgumentType.player()).executes(ctx -> {
+							ServerPlayerEntity player = EntityArgumentType.getPlayer(ctx, "player");
+							if (!Taken.take(null, player)) {
+								ctx.getSource().sendError(Text.literal(player.getGameProfile().getName() + " can't be taken right now"));
+								return 0;
+							}
+							ctx.getSource().sendFeedback(() -> Text.literal("Took " + player.getGameProfile().getName()), true);
+							return 1;
+						})))
 				.then(literal("despawn").executes(ctx -> {
 					int count = 0;
 					for (ServerWorld world : ctx.getSource().getServer().getWorlds()) {
@@ -162,6 +174,7 @@ public final class UninvitedCommands {
 				+ (UninvitedState.isNight(server.getOverworld()) ? ", it is night" : ", it is day")), false);
 		StatusExtras.appendMimics(server, source);
 		source.sendFeedback(() -> Text.literal(VoiceScares.statusLine()), false);
+		for (String line : TakenTracker.statusLines(server)) source.sendFeedback(() -> Text.literal(line).formatted(Formatting.DARK_PURPLE), false);
 
 		MutableText alone = Text.literal("Alone: ");
 		MutableText grouped = Text.literal("In a group: ");

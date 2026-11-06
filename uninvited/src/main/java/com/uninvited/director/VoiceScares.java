@@ -97,6 +97,13 @@ public final class VoiceScares {
 		}
 	}
 
+	/** The impostor talking to a friend in the taken player's voice. Safe without SVC. */
+	public static boolean speakAs(MimicEntity impostor, ServerPlayerEntity listener, UUID voiceOwner) {
+		VoiceBackend backend = VoiceBridge.backend();
+		if (!isActive() || backend == null || !backend.hasVoice(voiceOwner)) return false;
+		return backend.speakFrom(impostor, listener, voiceOwner);
+	}
+
 	/** For /uninvited scare ... voice. */
 	public static boolean speakNow(ServerPlayerEntity player) {
 		VoiceBackend backend = VoiceBridge.backend();

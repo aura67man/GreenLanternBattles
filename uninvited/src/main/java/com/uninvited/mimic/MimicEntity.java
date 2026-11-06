@@ -8,6 +8,7 @@ import net.minecraft.entity.EquipmentSlot;
 import com.uninvited.mimic.ai.FleeGoal;
 import com.uninvited.mimic.ai.FollowGoal;
 import com.uninvited.mimic.ai.HuntGoal;
+import com.uninvited.mimic.ai.ImpostorGoal;
 import com.uninvited.mimic.ai.LureGoal;
 import com.uninvited.mimic.ai.MimicBrain;
 import com.uninvited.mimic.ai.MimicNavigation;
@@ -78,6 +79,9 @@ public class MimicEntity extends HostileEntity {
 	private MimicMode mode = MimicMode.IDLE;
 	@Nullable
 	private UUID targetUuid;
+	/** IMPOSTOR only: the player it took, whose face it is wearing. */
+	@Nullable
+	private UUID victimUuid;
 	private int lifetimeTicks = 20 * 120;
 	private int revealTicks = -1;
 
@@ -121,6 +125,7 @@ public class MimicEntity extends HostileEntity {
 		this.goalSelector.add(3, new HuntGoal(this));
 		this.goalSelector.add(4, new LureGoal(this));
 		this.goalSelector.add(5, new FollowGoal(this));
+		this.goalSelector.add(5, new ImpostorGoal(this));
 		this.goalSelector.add(8, new LookAtEntityGoal(this, PlayerEntity.class, 64.0f, 1.0f));
 	}
 
@@ -212,6 +217,15 @@ public class MimicEntity extends HostileEntity {
 			return serverPlayer;
 		}
 		return null;
+	}
+
+	@Nullable
+	public UUID getVictimUuid() {
+		return victimUuid;
+	}
+
+	public void setVictimUuid(@Nullable UUID victimUuid) {
+		this.victimUuid = victimUuid;
 	}
 
 	public void setLifetimeTicks(int ticks) {
@@ -313,6 +327,11 @@ public class MimicEntity extends HostileEntity {
 	@Override
 	public boolean damage(DamageSource source, float amount) {
 		if (this.getWorld().isClient || revealTicks >= 0) return false;
+		if (source.getAttacker() instanceof PlayerEntity && mode == MimicMode.IMPOSTOR) {
+			// Punch your "friend" to check: a real player would just take the hit.
+			reveal();
+			return false;
+		}
 		if (source.getAttacker() instanceof PlayerEntity && mode != MimicMode.HUNT) {
 			vanish();
 			return false;

@@ -10,6 +10,12 @@ public enum MimicMode {
 	FOLLOW,
 	/** Stage 4: stalks a lone player, approaches disguised as a friend, then attacks. */
 	HUNT,
+	/**
+	 * After it has taken someone: wears the taken player's face and walks with their friends as if
+	 * nothing happened. Never attacks. Exposed by the Witness Bell, a punch, or the real player
+	 * coming back.
+	 */
+	IMPOSTOR,
 	/** Running away before vanishing (target rejoined the group, or it took too much damage). */
 	FLEE
 }

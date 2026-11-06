@@ -2,6 +2,7 @@ package com.uninvited.director;
 
 import com.uninvited.config.UninvitedConfig;
 import com.uninvited.scare.Scares;
+import com.uninvited.taken.TakenTracker;
 import com.uninvited.stage.Stage;
 import com.uninvited.stage.UninvitedState;
 import com.uninvited.util.AloneUtil;
@@ -40,6 +41,8 @@ public final class Director {
 		double activity = activity(world);
 		if (activity <= 0) return;
 		List<ServerPlayerEntity> lone = AloneUtil.lonePlayers(world);
+		// Someone already taken has enough to deal with.
+		lone.removeIf(player -> TakenTracker.isTaken(player.getUuid()));
 		if (lone.isEmpty()) return;
 
 		MimicDirector.tick(world, stage, activity, lone);

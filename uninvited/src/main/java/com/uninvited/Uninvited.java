@@ -8,6 +8,7 @@ import com.uninvited.item.ModItems;
 import com.uninvited.mimic.MimicEntities;
 import com.uninvited.scare.Scares;
 import com.uninvited.stage.StageTracker;
+import com.uninvited.taken.TakenTracker;
 import com.uninvited.util.Scheduler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -33,6 +34,7 @@ public final class Uninvited implements ModInitializer {
 		Scheduler.register();
 		Scares.register();
 		ChatMemory.register();
+		TakenTracker.register();
 		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
 				UninvitedCommands.register(dispatcher));
 		LOG.info("UNINVITED loaded. Stay together.");

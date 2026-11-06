@@ -45,10 +45,15 @@ public final class FakeChat {
 		String line = pickLine(ChatMemory.linesOf(friend.uuid()), random);
 		if (line == null) return false;
 
-		ServerPlayerEntity online = server.getPlayerManager().getPlayer(friend.uuid());
-		Text name = online != null ? online.getDisplayName() : offlineName(friend.uuid(), friend.name());
-		target.sendMessage(Text.translatable("chat.type.text", name, Text.literal(line)), false);
+		target.sendMessage(asChatFrom(server, friend.uuid(), friend.name(), line), false);
 		return true;
+	}
+
+	/** {@code <Name> line}, built exactly like vanilla player chat. */
+	public static Text asChatFrom(MinecraftServer server, UUID uuid, String name, String line) {
+		ServerPlayerEntity online = server.getPlayerManager().getPlayer(uuid);
+		Text shown = online != null ? online.getDisplayName() : offlineName(uuid, name);
+		return Text.translatable("chat.type.text", shown, Text.literal(line));
 	}
 
 	/**
@@ -81,7 +86,7 @@ public final class FakeChat {
 
 	/** Weighted pick: short lines and lines with lure words are much more likely. */
 	@Nullable
-	static String pickLine(List<String> lines, Random random) {
+	public static String pickLine(List<String> lines, Random random) {
 		if (lines.isEmpty()) return null;
 		double[] weights = new double[lines.size()];
 		double total = 0;
